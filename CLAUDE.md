@@ -17,12 +17,15 @@ go vet ./...
 
 ## Architecture
 
-- **VCS backends**: Supports both GitHub and GitLab. Each backend implements a common interface for fetching issues/PRs and determining user activity.
-  - GitHub: authenticates via `gh auth` (the GitHub CLI)
-  - GitLab: authenticates via `glab auth` (the GitLab CLI), respects `GITLAB_TOKEN` and `GITLAB_HOST` environment variables
-- **Repo detection**: Derives the remote owner/repo from the git remote of the current working directory. Exits with an error if not inside a git repo.
-- **Filtering logic**: Finds the most recently updated issue or PR/MR that the current user has *not* interacted with within the `--since` duration.
-- **Output**: Default text mode prints a clickable URL, summary, and a list of timestamped updates since the user's last interaction, each truncated to fit one line. Format example: `(3 days ago) @user123 commented on the issue: > I think that this is a good idea, but we...`
+- **`duration/`** — Parses duration strings with `d` (days) support on top of Go's `time.ParseDuration`.
+- **`repo/`** — Detects owner/repo/platform from git remote URL (SSH and HTTPS). Respects `GITLAB_HOST` env var.
+- **`format/`** — Formats items and events for terminal output with relative timestamps and line truncation.
+- **`backend/`** — `Backend` interface with `CurrentUser()` and `NextItem()`. Two implementations:
+  - `gitHub` — uses `gh api` for issues + timeline events
+  - `gitLab` — uses `glab api` for issues + MRs + notes
+- **`main.go`** — CLI entry point using `flag` package. Wires repo detection → backend selection → fetch → format.
+
+All command execution goes through `backend.CmdRunner` (`func(name string, args ...string) ([]byte, error)`) for testability. Only external dependency is `golang.org/x/term` for terminal width.
 
 ## CLI Flags
 
