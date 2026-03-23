@@ -28,6 +28,13 @@ type ghTimelineEvent struct {
 	Body      string    `json:"body"`
 }
 
+type ghReview struct {
+	User        ghActor   `json:"user"`
+	State       string    `json:"state"`
+	SubmittedAt time.Time `json:"submitted_at"`
+	Body        string    `json:"body"`
+}
+
 type ghUser struct {
 	Login string `json:"login"`
 }
@@ -86,12 +93,29 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 			return nil, err
 		}
 
+		// For PRs, also fetch reviews (timeline often has null actor/time for reviews)
+		var reviews []ghReview
+		if issue.PullRequest != nil {
+			reviews, err = g.getReviews(owner, repo, issue.Number)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		// Check if user interacted within the since window
 		userTouched := false
 		for _, ev := range events {
 			if ev.Actor.Login != "" && ev.Actor.Login == user && ev.CreatedAt.After(cutoff) {
 				userTouched = true
 				break
+			}
+		}
+		if !userTouched {
+			for _, r := range reviews {
+				if r.User.Login == user && r.SubmittedAt.After(cutoff) {
+					userTouched = true
+					break
+				}
 			}
 		}
 		if userTouched {
@@ -103,6 +127,11 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 		for _, ev := range events {
 			if ev.Actor.Login == user && ev.CreatedAt.After(lastUserTime) {
 				lastUserTime = ev.CreatedAt
+			}
+		}
+		for _, r := range reviews {
+			if r.User.Login == user && r.SubmittedAt.After(lastUserTime) {
+				lastUserTime = r.SubmittedAt
 			}
 		}
 
@@ -124,6 +153,27 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 			fmtEvents = append(fmtEvents, format.Event{
 				Timestamp: ev.CreatedAt,
 				Author:    ev.Actor.Login,
+				Summary:   summary,
+			})
+		}
+		for _, r := range reviews {
+			if r.User.Login == user {
+				continue
+			}
+			if !lastUserTime.IsZero() && r.SubmittedAt.Before(lastUserTime) {
+				continue
+			}
+			summary := fmt.Sprintf("reviewed (%s)", r.State)
+			if r.Body != "" {
+				body := r.Body
+				if len(body) > 60 {
+					body = body[:60]
+				}
+				summary = fmt.Sprintf("reviewed (%s): > %s", r.State, body)
+			}
+			fmtEvents = append(fmtEvents, format.Event{
+				Timestamp: r.SubmittedAt,
+				Author:    r.User.Login,
 				Summary:   summary,
 			})
 		}
@@ -153,6 +203,19 @@ func (g *gitHub) getTimeline(owner, repo string, number int) ([]ghTimelineEvent,
 		return nil, fmt.Errorf("failed to parse timeline: %w", err)
 	}
 	return events, nil
+}
+
+func (g *gitHub) getReviews(owner, repo string, number int) ([]ghReview, error) {
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number)
+	out, err := g.run("gh", "api", endpoint, "--paginate")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reviews for #%d: %w", number, err)
+	}
+	var reviews []ghReview
+	if err := json.Unmarshal(out, &reviews); err != nil {
+		return nil, fmt.Errorf("failed to parse reviews: %w", err)
+	}
+	return reviews, nil
 }
 
 func eventSummary(event, body string) string {

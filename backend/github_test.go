@@ -162,6 +162,87 @@ func TestGitHubNextItemIgnoreEvents(t *testing.T) {
 	}
 }
 
+func TestGitHubNextItemReviewCountsAsTouch(t *testing.T) {
+	now := time.Now()
+	prMarker := json.RawMessage(`{"url":"https://api.github.com/repos/o/r/pulls/5"}`)
+
+	issues := []ghIssue{
+		{
+			Number:      5,
+			Title:       "PR I reviewed recently",
+			HTMLURL:     "https://github.com/o/r/pull/5",
+			UpdatedAt:   now.Add(-10 * time.Minute),
+			PullRequest: &prMarker,
+		},
+		{
+			Number:    6,
+			Title:     "Issue someone else updated",
+			HTMLURL:   "https://github.com/o/r/issues/6",
+			UpdatedAt: now.Add(-20 * time.Minute),
+		},
+	}
+
+	// Timeline for PR 5: someone else's event (my review won't appear here)
+	events5 := []ghTimelineEvent{
+		{
+			Event:     "review_requested",
+			CreatedAt: now.Add(-1 * time.Hour),
+			Actor:     ghActor{Login: "other"},
+		},
+	}
+
+	// Reviews for PR 5: I reviewed it recently
+	reviews5 := []ghReview{
+		{
+			User:        ghActor{Login: "me"},
+			State:       "COMMENTED",
+			SubmittedAt: now.Add(-10 * time.Minute),
+			Body:        "needs changes here",
+		},
+	}
+
+	// Timeline for issue 6
+	events6 := []ghTimelineEvent{
+		{
+			Event:     "commented",
+			CreatedAt: now.Add(-20 * time.Minute),
+			Actor:     ghActor{Login: "other"},
+			Body:      "please look at this",
+		},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/5/timeline" {
+				return json.Marshal(events5)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/pulls/5/reviews" {
+				return json.Marshal(reviews5)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/6/timeline" {
+				return json.Marshal(events6)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil)
+	if err != nil {
+		t.Fatalf("NextItem() error: %v", err)
+	}
+	if item == nil {
+		t.Fatal("NextItem() returned nil")
+	}
+	// PR 5 should be skipped because I reviewed it within 30m, should get issue 6
+	if item.Title != "Issue someone else updated" {
+		t.Errorf("expected issue 6, got %q", item.Title)
+	}
+}
+
 func TestGitHubNextItemAllTouchedByMe(t *testing.T) {
 	now := time.Now()
 
