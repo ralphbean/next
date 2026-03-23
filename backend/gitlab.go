@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -9,6 +10,18 @@ import (
 
 	"github.com/rbean/next-up/format"
 )
+
+// fixPaginatedJSON handles glab's --paginate output which concatenates
+// multiple JSON arrays like [...][...] into a single valid array.
+func fixPaginatedJSON(data []byte) []byte {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return []byte("[]")
+	}
+	// Replace "][" with "," to merge concatenated arrays
+	data = bytes.ReplaceAll(data, []byte("]["), []byte(","))
+	return data
+}
 
 type glNoteAuthor struct {
 	Username string `json:"username"`
@@ -160,36 +173,26 @@ func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreE
 }
 
 func (g *gitLab) listIssues(projectPath string) ([]glIssue, error) {
-	endpoint := fmt.Sprintf("projects/%s/issues", projectPath)
-	out, err := g.run(g.cmd(), "api", endpoint, "--paginate",
-		"-f", "state=opened",
-		"-f", "order_by=updated_at",
-		"-f", "sort=desc",
-		"-f", "per_page=30",
-	)
+	endpoint := fmt.Sprintf("projects/%s/issues?state=opened&order_by=updated_at&sort=desc&per_page=30", projectPath)
+	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list GitLab issues: %w", err)
 	}
 	var issues []glIssue
-	if err := json.Unmarshal(out, &issues); err != nil {
+	if err := json.Unmarshal(fixPaginatedJSON(out), &issues); err != nil {
 		return nil, fmt.Errorf("failed to parse GitLab issues: %w", err)
 	}
 	return issues, nil
 }
 
 func (g *gitLab) listMRs(projectPath string) ([]glMR, error) {
-	endpoint := fmt.Sprintf("projects/%s/merge_requests", projectPath)
-	out, err := g.run(g.cmd(), "api", endpoint, "--paginate",
-		"-f", "state=opened",
-		"-f", "order_by=updated_at",
-		"-f", "sort=desc",
-		"-f", "per_page=30",
-	)
+	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=opened&order_by=updated_at&sort=desc&per_page=30", projectPath)
+	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list GitLab MRs: %w", err)
 	}
 	var mrs []glMR
-	if err := json.Unmarshal(out, &mrs); err != nil {
+	if err := json.Unmarshal(fixPaginatedJSON(out), &mrs); err != nil {
 		return nil, fmt.Errorf("failed to parse GitLab MRs: %w", err)
 	}
 	return mrs, nil
@@ -202,7 +205,7 @@ func (g *gitLab) getNotes(projectPath, kind string, iid int) ([]glNote, error) {
 		return nil, fmt.Errorf("failed to get notes for %s #%d: %w", kind, iid, err)
 	}
 	var notes []glNote
-	if err := json.Unmarshal(out, &notes); err != nil {
+	if err := json.Unmarshal(fixPaginatedJSON(out), &notes); err != nil {
 		return nil, fmt.Errorf("failed to parse notes: %w", err)
 	}
 	return notes, nil

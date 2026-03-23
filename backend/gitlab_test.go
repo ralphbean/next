@@ -3,6 +3,7 @@ package backend
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -73,11 +74,11 @@ func TestGitLabNextItem(t *testing.T) {
 	}
 
 	runner := func(name string, args ...string) ([]byte, error) {
-		for i, a := range args {
-			if i > 0 && args[i-1] == "projects/o%2Fr/issues" && a == "--paginate" {
+		for _, a := range args {
+			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
 				return json.Marshal(issues)
 			}
-			if i > 0 && args[i-1] == "projects/o%2Fr/merge_requests" && a == "--paginate" {
+			if strings.HasPrefix(a, "projects/o%2Fr/merge_requests?") {
 				return json.Marshal(mrs)
 			}
 			if a == "projects/o%2Fr/issues/5/notes" {
@@ -129,11 +130,11 @@ func TestGitLabNextItemNoneAvailable(t *testing.T) {
 	}
 
 	runner := func(name string, args ...string) ([]byte, error) {
-		for i, a := range args {
-			if i > 0 && args[i-1] == "projects/o%2Fr/issues" {
+		for _, a := range args {
+			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
 				return json.Marshal(issues)
 			}
-			if i > 0 && args[i-1] == "projects/o%2Fr/merge_requests" {
+			if strings.HasPrefix(a, "projects/o%2Fr/merge_requests?") {
 				return json.Marshal([]glMR{})
 			}
 			if a == "projects/o%2Fr/issues/1/notes" {
