@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/rbean/next-up/format"
@@ -60,11 +61,9 @@ func (g *gitHub) CurrentUser() (string, error) {
 }
 
 func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool) (*format.Item, error) {
-	// Fetch issues (includes PRs) sorted by updated
+	// Fetch first page of issues (includes PRs) sorted by updated
 	endpoint := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
 	out, err := g.run("gh", "api", endpoint,
-		"--paginate",
-		"-q", ".",
 		"--method", "GET",
 		"-f", "state=open",
 		"-f", "sort=updated",
@@ -87,20 +86,42 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 
 	cutoff := time.Now().Add(-since)
 
-	for _, issue := range issues {
-		events, err := g.getTimeline(owner, repo, issue.Number)
-		if err != nil {
-			return nil, err
-		}
-
-		// For PRs, also fetch reviews (timeline often has null actor/time for reviews)
-		var reviews []ghReview
-		if issue.PullRequest != nil {
-			reviews, err = g.getReviews(owner, repo, issue.Number)
+	// Prefetch timeline and reviews in parallel for all issues
+	type prefetch struct {
+		events  []ghTimelineEvent
+		reviews []ghReview
+		err     error
+	}
+	fetched := make([]prefetch, len(issues))
+	var wg sync.WaitGroup
+	for i, issue := range issues {
+		wg.Add(1)
+		go func(i int, issue ghIssue) {
+			defer wg.Done()
+			events, err := g.getTimeline(owner, repo, issue.Number)
 			if err != nil {
-				return nil, err
+				fetched[i].err = err
+				return
 			}
+			fetched[i].events = events
+			if issue.PullRequest != nil {
+				reviews, err := g.getReviews(owner, repo, issue.Number)
+				if err != nil {
+					fetched[i].err = err
+					return
+				}
+				fetched[i].reviews = reviews
+			}
+		}(i, issue)
+	}
+	wg.Wait()
+
+	for i, issue := range issues {
+		if fetched[i].err != nil {
+			return nil, fetched[i].err
 		}
+		events := fetched[i].events
+		reviews := fetched[i].reviews
 
 		// Check if user interacted within the since window
 		userTouched := false

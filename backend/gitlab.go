@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/rbean/next-up/format"
@@ -89,14 +90,26 @@ func (g *gitLab) CurrentUser() (string, error) {
 func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool) (*format.Item, error) {
 	projectPath := url.PathEscape(owner + "/" + repo)
 
-	// Fetch issues and MRs
-	issues, err := g.listIssues(projectPath)
-	if err != nil {
-		return nil, err
+	// Fetch issues and MRs in parallel
+	var issues []glIssue
+	var mrs []glMR
+	var issErr, mrErr error
+	var listWg sync.WaitGroup
+	listWg.Add(2)
+	go func() {
+		defer listWg.Done()
+		issues, issErr = g.listIssues(projectPath)
+	}()
+	go func() {
+		defer listWg.Done()
+		mrs, mrErr = g.listMRs(projectPath)
+	}()
+	listWg.Wait()
+	if issErr != nil {
+		return nil, issErr
 	}
-	mrs, err := g.listMRs(projectPath)
-	if err != nil {
-		return nil, err
+	if mrErr != nil {
+		return nil, mrErr
 	}
 
 	// Merge into unified list sorted by updated_at descending
@@ -119,11 +132,28 @@ func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreE
 
 	cutoff := time.Now().Add(-since)
 
-	for _, item := range items {
-		notes, err := g.getNotes(projectPath, item.Kind, item.IID)
-		if err != nil {
-			return nil, err
+	// Prefetch notes in parallel for all items
+	type prefetch struct {
+		notes []glNote
+		err   error
+	}
+	fetched := make([]prefetch, len(items))
+	var wg sync.WaitGroup
+	for i, item := range items {
+		wg.Add(1)
+		go func(i int, item glItem) {
+			defer wg.Done()
+			notes, err := g.getNotes(projectPath, item.Kind, item.IID)
+			fetched[i] = prefetch{notes: notes, err: err}
+		}(i, item)
+	}
+	wg.Wait()
+
+	for i, item := range items {
+		if fetched[i].err != nil {
+			return nil, fetched[i].err
 		}
+		notes := fetched[i].notes
 
 		userTouched := false
 		for _, n := range notes {
@@ -174,12 +204,12 @@ func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreE
 
 func (g *gitLab) listIssues(projectPath string) ([]glIssue, error) {
 	endpoint := fmt.Sprintf("projects/%s/issues?state=opened&order_by=updated_at&sort=desc&per_page=30", projectPath)
-	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
+	out, err := g.run(g.cmd(), "api", endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list GitLab issues: %w", err)
 	}
 	var issues []glIssue
-	if err := json.Unmarshal(fixPaginatedJSON(out), &issues); err != nil {
+	if err := json.Unmarshal(out, &issues); err != nil {
 		return nil, fmt.Errorf("failed to parse GitLab issues: %w", err)
 	}
 	return issues, nil
@@ -187,12 +217,12 @@ func (g *gitLab) listIssues(projectPath string) ([]glIssue, error) {
 
 func (g *gitLab) listMRs(projectPath string) ([]glMR, error) {
 	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=opened&order_by=updated_at&sort=desc&per_page=30", projectPath)
-	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
+	out, err := g.run(g.cmd(), "api", endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list GitLab MRs: %w", err)
 	}
 	var mrs []glMR
-	if err := json.Unmarshal(fixPaginatedJSON(out), &mrs); err != nil {
+	if err := json.Unmarshal(out, &mrs); err != nil {
 		return nil, fmt.Errorf("failed to parse GitLab MRs: %w", err)
 	}
 	return mrs, nil
