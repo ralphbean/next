@@ -31,14 +31,12 @@ func TestGitHubNextItem(t *testing.T) {
 			Title:     "Old issue I touched",
 			HTMLURL:   "https://github.com/o/r/issues/10",
 			UpdatedAt: now.Add(-1 * time.Hour),
-			IsPR:      false,
 		},
 		{
 			Number:    20,
 			Title:     "Recent issue someone else updated",
 			HTMLURL:   "https://github.com/o/r/issues/20",
 			UpdatedAt: now.Add(-30 * time.Minute),
-			IsPR:      false,
 		},
 	}
 

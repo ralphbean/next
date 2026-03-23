@@ -18,7 +18,7 @@ type ghIssue struct {
 	Title     string    `json:"title"`
 	HTMLURL   string    `json:"html_url"`
 	UpdatedAt time.Time `json:"updated_at"`
-	IsPR      bool      `json:"pull_request,omitempty"`
+	PullRequest *json.RawMessage `json:"pull_request,omitempty"`
 }
 
 type ghTimelineEvent struct {
@@ -89,7 +89,7 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration) (*forma
 		// Check if user interacted within the since window
 		userTouched := false
 		for _, ev := range events {
-			if ev.Actor.Login == user && ev.CreatedAt.After(cutoff) {
+			if ev.Actor.Login != "" && ev.Actor.Login == user && ev.CreatedAt.After(cutoff) {
 				userTouched = true
 				break
 			}
@@ -108,6 +108,9 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration) (*forma
 
 		var fmtEvents []format.Event
 		for _, ev := range events {
+			if ev.Actor.Login == "" || ev.CreatedAt.IsZero() {
+				continue
+			}
 			if ev.Actor.Login == user {
 				continue
 			}
