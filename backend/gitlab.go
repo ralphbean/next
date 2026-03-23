@@ -73,7 +73,7 @@ func (g *gitLab) CurrentUser() (string, error) {
 	return u.Username, nil
 }
 
-func (g *gitLab) NextItem(owner, repo, user string, since time.Duration) (*format.Item, error) {
+func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool) (*format.Item, error) {
 	projectPath := url.PathEscape(owner + "/" + repo)
 
 	// Fetch issues and MRs

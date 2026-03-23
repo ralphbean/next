@@ -52,7 +52,7 @@ func (g *gitHub) CurrentUser() (string, error) {
 	return u.Login, nil
 }
 
-func (g *gitHub) NextItem(owner, repo, user string, since time.Duration) (*format.Item, error) {
+func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool) (*format.Item, error) {
 	// Fetch issues (includes PRs) sorted by updated
 	endpoint := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
 	out, err := g.run("gh", "api", endpoint,
@@ -111,6 +111,9 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration) (*forma
 			if ev.Actor.Login == "" || ev.CreatedAt.IsZero() {
 				continue
 			}
+			if ignoreEvents[ev.Event] {
+				continue
+			}
 			if ev.Actor.Login == user {
 				continue
 			}
@@ -123,6 +126,10 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration) (*forma
 				Author:    ev.Actor.Login,
 				Summary:   summary,
 			})
+		}
+
+		if len(fmtEvents) == 0 {
+			continue
 		}
 
 		return &format.Item{

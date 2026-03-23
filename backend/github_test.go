@@ -77,7 +77,7 @@ func TestGitHubNextItem(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	item, err := gh.NextItem("o", "r", "me", 30*time.Minute)
+	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("NextItem() error: %v", err)
 	}
@@ -89,6 +89,76 @@ func TestGitHubNextItem(t *testing.T) {
 	}
 	if len(item.Events) == 0 {
 		t.Error("expected at least one event")
+	}
+}
+
+func TestGitHubNextItemIgnoreEvents(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    1,
+			Title:     "Issue with only mentioned events",
+			HTMLURL:   "https://github.com/o/r/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+		},
+		{
+			Number:    2,
+			Title:     "Issue with a real comment",
+			HTMLURL:   "https://github.com/o/r/issues/2",
+			UpdatedAt: now.Add(-20 * time.Minute),
+		},
+	}
+
+	events1 := []ghTimelineEvent{
+		{
+			Event:     "mentioned",
+			CreatedAt: now.Add(-10 * time.Minute),
+			Actor:     ghActor{Login: "other"},
+		},
+		{
+			Event:     "subscribed",
+			CreatedAt: now.Add(-10 * time.Minute),
+			Actor:     ghActor{Login: "other"},
+		},
+	}
+
+	events2 := []ghTimelineEvent{
+		{
+			Event:     "commented",
+			CreatedAt: now.Add(-20 * time.Minute),
+			Actor:     ghActor{Login: "other"},
+			Body:      "a real comment",
+		},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/1/timeline" {
+				return json.Marshal(events1)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/2/timeline" {
+				return json.Marshal(events2)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	ignore := map[string]bool{"mentioned": true, "subscribed": true}
+	gh := NewGitHub(runner)
+	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, ignore)
+	if err != nil {
+		t.Fatalf("NextItem() error: %v", err)
+	}
+	if item == nil {
+		t.Fatal("NextItem() returned nil")
+	}
+	// Issue 1 should be skipped (only has ignored events), should get issue 2
+	if item.Title != "Issue with a real comment" {
+		t.Errorf("expected issue 2, got %q", item.Title)
 	}
 }
 
@@ -123,7 +193,7 @@ func TestGitHubNextItemAllTouchedByMe(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	item, err := gh.NextItem("o", "r", "me", 30*time.Minute)
+	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("NextItem() error: %v", err)
 	}

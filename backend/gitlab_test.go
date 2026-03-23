@@ -94,7 +94,7 @@ func TestGitLabNextItem(t *testing.T) {
 	}
 
 	gl := NewGitLab(runner, "")
-	item, err := gl.NextItem("o", "r", "me", 30*time.Minute)
+	item, err := gl.NextItem("o", "r", "me", 30*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("NextItem() error: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestGitLabNextItemNoneAvailable(t *testing.T) {
 	}
 
 	gl := NewGitLab(runner, "")
-	item, err := gl.NextItem("o", "r", "me", 30*time.Minute)
+	item, err := gl.NextItem("o", "r", "me", 30*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("NextItem() error: %v", err)
 	}
