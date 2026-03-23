@@ -77,7 +77,7 @@ func TestGitHubNextItem(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil)
+	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil, nil)
 	if err != nil {
 		t.Fatalf("NextItem() error: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestGitHubNextItemIgnoreEvents(t *testing.T) {
 
 	ignore := map[string]bool{"mentioned": true, "subscribed": true}
 	gh := NewGitHub(runner)
-	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, ignore)
+	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, ignore, nil)
 	if err != nil {
 		t.Fatalf("NextItem() error: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestGitHubNextItemReviewCountsAsTouch(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil)
+	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil, nil)
 	if err != nil {
 		t.Fatalf("NextItem() error: %v", err)
 	}
@@ -274,11 +274,84 @@ func TestGitHubNextItemAllTouchedByMe(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil)
+	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil, nil)
 	if err != nil {
 		t.Fatalf("NextItem() error: %v", err)
 	}
 	if item != nil {
 		t.Errorf("expected nil (nothing to do), got %+v", item)
+	}
+}
+
+func TestGitHubNextItemIgnoreUsers(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    36,
+			Title:     "PR with bot activity",
+			HTMLURL:   "https://github.com/o/r/pull/36",
+			UpdatedAt: now.Add(-5 * time.Minute),
+		},
+	}
+
+	// Bot commented after user, making it look like new activity
+	events36 := []ghTimelineEvent{
+		{
+			Event:     "commented",
+			CreatedAt: now.Add(-1 * time.Hour),
+			Actor:     ghActor{Login: "other"},
+			Body:      "please review",
+		},
+		{
+			Event:     "commented",
+			CreatedAt: now.Add(-50 * time.Minute),
+			Actor:     ghActor{Login: "me"},
+			Body:      "on it",
+		},
+		{
+			Event:     "commented",
+			CreatedAt: now.Add(-5 * time.Minute),
+			Actor:     ghActor{Login: "qodo-code-review[bot]"},
+			Body:      "automated review comment",
+		},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/36/timeline" {
+				return json.Marshal(events36)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+
+	// Without ignoring the bot, the bot's comment is the only event after "me",
+	// but since we ignore the bot user, there are no new events → nil result
+	ignoreUsers := map[string]bool{"qodo-code-review[bot]": true}
+	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil, ignoreUsers)
+	if err != nil {
+		t.Fatalf("NextItem() error: %v", err)
+	}
+	if item != nil {
+		t.Errorf("expected nil (bot activity should be ignored), got %+v", item)
+	}
+
+	// Without ignoring the bot, we should get the item since the bot's comment
+	// appears as new activity after the user's last touch (which is outside the cooldown)
+	item, err = gh.NextItem("o", "r", "me", 30*time.Minute, nil, nil)
+	if err != nil {
+		t.Fatalf("NextItem() error: %v", err)
+	}
+	if item == nil {
+		t.Fatal("expected item when bot is not ignored")
+	}
+	if len(item.Events) != 1 || item.Events[0].Author != "qodo-code-review[bot]" {
+		t.Errorf("expected bot event, got %+v", item.Events)
 	}
 }

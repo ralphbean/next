@@ -87,7 +87,7 @@ func (g *gitLab) CurrentUser() (string, error) {
 	return u.Username, nil
 }
 
-func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool) (*format.Item, error) {
+func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool, ignoreUsers map[string]bool) (*format.Item, error) {
 	projectPath := url.PathEscape(owner + "/" + repo)
 
 	// Fetch issues and MRs in parallel
@@ -157,6 +157,9 @@ func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreE
 
 		userTouched := false
 		for _, n := range notes {
+			if ignoreUsers[n.Author.Username] {
+				continue
+			}
 			if n.Author.Username == user && n.CreatedAt.After(cutoff) {
 				userTouched = true
 				break
@@ -168,6 +171,9 @@ func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreE
 
 		var lastUserTime time.Time
 		for _, n := range notes {
+			if ignoreUsers[n.Author.Username] {
+				continue
+			}
 			if n.Author.Username == user && n.CreatedAt.After(lastUserTime) {
 				lastUserTime = n.CreatedAt
 			}
@@ -175,7 +181,7 @@ func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreE
 
 		var fmtEvents []format.Event
 		for _, n := range notes {
-			if n.Author.Username == user || n.System {
+			if n.Author.Username == user || n.System || ignoreUsers[n.Author.Username] {
 				continue
 			}
 			if !lastUserTime.IsZero() && n.CreatedAt.Before(lastUserTime) {

@@ -60,7 +60,7 @@ func (g *gitHub) CurrentUser() (string, error) {
 	return u.Login, nil
 }
 
-func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool) (*format.Item, error) {
+func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool, ignoreUsers map[string]bool) (*format.Item, error) {
 	// Fetch first page of issues (includes PRs) sorted by updated
 	endpoint := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
 	out, err := g.run("gh", "api", endpoint,
@@ -126,6 +126,9 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 		// Check if user interacted within the since window
 		userTouched := false
 		for _, ev := range events {
+			if ignoreUsers[ev.Actor.Login] {
+				continue
+			}
 			if ev.Actor.Login != "" && ev.Actor.Login == user && ev.CreatedAt.After(cutoff) {
 				userTouched = true
 				break
@@ -133,6 +136,9 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 		}
 		if !userTouched {
 			for _, r := range reviews {
+				if ignoreUsers[r.User.Login] {
+					continue
+				}
 				if r.User.Login == user && r.SubmittedAt.After(cutoff) {
 					userTouched = true
 					break
@@ -146,11 +152,17 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 		// Build the item with events since user's last interaction
 		var lastUserTime time.Time
 		for _, ev := range events {
+			if ignoreUsers[ev.Actor.Login] {
+				continue
+			}
 			if ev.Actor.Login == user && ev.CreatedAt.After(lastUserTime) {
 				lastUserTime = ev.CreatedAt
 			}
 		}
 		for _, r := range reviews {
+			if ignoreUsers[r.User.Login] {
+				continue
+			}
 			if r.User.Login == user && r.SubmittedAt.After(lastUserTime) {
 				lastUserTime = r.SubmittedAt
 			}
@@ -164,7 +176,7 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 			if ignoreEvents[ev.Event] {
 				continue
 			}
-			if ev.Actor.Login == user {
+			if ev.Actor.Login == user || ignoreUsers[ev.Actor.Login] {
 				continue
 			}
 			if !lastUserTime.IsZero() && ev.CreatedAt.Before(lastUserTime) {
@@ -178,7 +190,7 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 			})
 		}
 		for _, r := range reviews {
-			if r.User.Login == user {
+			if r.User.Login == user || ignoreUsers[r.User.Login] {
 				continue
 			}
 			if !lastUserTime.IsZero() && r.SubmittedAt.Before(lastUserTime) {
