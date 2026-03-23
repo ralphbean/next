@@ -94,10 +94,13 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 	}
 	fetched := make([]prefetch, len(issues))
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, 5)
 	for i, issue := range issues {
 		wg.Add(1)
 		go func(i int, issue ghIssue) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			events, err := g.getTimeline(owner, repo, issue.Number)
 			if err != nil {
 				fetched[i].err = err
@@ -199,8 +202,8 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 			summary := fmt.Sprintf("reviewed (%s)", r.State)
 			if r.Body != "" {
 				body := r.Body
-				if len(body) > 60 {
-					body = body[:60]
+				if r := []rune(body); len(r) > 60 {
+					body = string(r[:60])
 				}
 				summary = fmt.Sprintf("reviewed (%s): > %s", r.State, body)
 			}
@@ -254,8 +257,8 @@ func (g *gitHub) getReviews(owner, repo string, number int) ([]ghReview, error) 
 func eventSummary(event, body string) string {
 	switch event {
 	case "commented":
-		if len(body) > 80 {
-			body = body[:80]
+		if r := []rune(body); len(r) > 80 {
+			body = string(r[:80])
 		}
 		return fmt.Sprintf("commented: > %s", body)
 	case "closed":

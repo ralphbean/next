@@ -42,8 +42,8 @@ func RelativeTime(t time.Time) string {
 // FormatEvent formats a single event as a one-line string, truncated to maxWidth.
 func FormatEvent(e Event, maxWidth int) string {
 	line := fmt.Sprintf("(%s) @%s %s", RelativeTime(e.Timestamp), e.Author, e.Summary)
-	if len(line) > maxWidth {
-		line = line[:maxWidth-3] + "..."
+	if r := []rune(line); len(r) > maxWidth {
+		line = string(r[:maxWidth-3]) + "..."
 	}
 	return line
 }

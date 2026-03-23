@@ -139,10 +139,13 @@ func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreE
 	}
 	fetched := make([]prefetch, len(items))
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, 5)
 	for i, item := range items {
 		wg.Add(1)
 		go func(i int, item glItem) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			notes, err := g.getNotes(projectPath, item.Kind, item.IID)
 			fetched[i] = prefetch{notes: notes, err: err}
 		}(i, item)
@@ -188,8 +191,8 @@ func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreE
 				continue
 			}
 			body := n.Body
-			if len(body) > 80 {
-				body = body[:80]
+			if r := []rune(body); len(r) > 80 {
+				body = string(r[:80])
 			}
 			fmtEvents = append(fmtEvents, format.Event{
 				Timestamp: n.CreatedAt,
