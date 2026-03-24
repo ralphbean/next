@@ -120,9 +120,50 @@ func TestFormatItems(t *testing.T) {
 	if !strings.Contains(got, "@bob") {
 		t.Error("expected second item author in output")
 	}
-	// Items should be separated by a blank line
-	if !strings.Contains(got, "\n\n") {
-		t.Error("expected blank line separator between items")
+	// Each item should start with a bullet character
+	if !strings.Contains(got, "▶") {
+		t.Error("expected bullet character ▶ before items")
+	}
+	// Items should be separated by a horizontal line
+	if !strings.Contains(got, "─") {
+		t.Error("expected horizontal line separator between items")
+	}
+}
+
+func TestFormatItemsBulletOnEachEntry(t *testing.T) {
+	items := []Item{
+		{
+			URL:   "https://github.com/owner/repo/issues/1",
+			Title: "First",
+			Events: []Event{
+				{Timestamp: time.Now().Add(-1 * time.Hour), Author: "a", Summary: "x"},
+			},
+		},
+		{
+			URL:   "https://github.com/owner/repo/issues/2",
+			Title: "Second",
+			Events: []Event{
+				{Timestamp: time.Now().Add(-2 * time.Hour), Author: "b", Summary: "y"},
+			},
+		},
+		{
+			URL:   "https://github.com/owner/repo/issues/3",
+			Title: "Third",
+			Events: []Event{
+				{Timestamp: time.Now().Add(-3 * time.Hour), Author: "c", Summary: "z"},
+			},
+		},
+	}
+	got := FormatItems(items, 80)
+	// Count bullet characters - should be one per item
+	bulletCount := strings.Count(got, "▶")
+	if bulletCount != 3 {
+		t.Errorf("expected 3 bullet characters, got %d in:\n%s", bulletCount, got)
+	}
+	// Count separator lines - should be one between each pair of items
+	separatorCount := strings.Count(got, "──")
+	if separatorCount < 2 {
+		t.Errorf("expected at least 2 separator lines, got %d in:\n%s", separatorCount, got)
 	}
 }
 
@@ -137,9 +178,15 @@ func TestFormatItemsSingle(t *testing.T) {
 		},
 	}
 	got := FormatItems(items, 120)
-	// Single item should not have trailing blank line separator
+	// Single item should not have bullet or separator decorations
 	singleGot := FormatItem(items[0], 120)
 	if got != singleGot {
 		t.Errorf("FormatItems with single item should match FormatItem output.\nFormatItems: %q\nFormatItem:  %q", got, singleGot)
+	}
+	if strings.Contains(got, "▶") {
+		t.Error("single item should not have bullet character")
+	}
+	if strings.Contains(got, "─") {
+		t.Error("single item should not have separator line")
 	}
 }
