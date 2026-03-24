@@ -87,7 +87,7 @@ func (g *gitLab) CurrentUser() (string, error) {
 	return u.Username, nil
 }
 
-func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool, ignoreUsers map[string]bool) (*format.Item, error) {
+func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool, ignoreUsers map[string]bool, limit int) ([]format.Item, error) {
 	projectPath := url.PathEscape(owner + "/" + repo)
 
 	// Fetch issues and MRs in parallel
@@ -152,6 +152,7 @@ func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreE
 	}
 	wg.Wait()
 
+	var result []format.Item
 	for i, item := range items {
 		if fetched[i].err != nil {
 			return nil, fetched[i].err
@@ -201,14 +202,17 @@ func (g *gitLab) NextItem(owner, repo, user string, since time.Duration, ignoreE
 			})
 		}
 
-		return &format.Item{
+		result = append(result, format.Item{
 			URL:    item.WebURL,
 			Title:  item.Title,
 			Events: fmtEvents,
-		}, nil
+		})
+		if len(result) >= limit {
+			break
+		}
 	}
 
-	return nil, nil
+	return result, nil
 }
 
 func (g *gitLab) listIssues(projectPath string) ([]glIssue, error) {

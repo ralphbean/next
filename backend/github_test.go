@@ -21,7 +21,7 @@ func TestGitHubCurrentUser(t *testing.T) {
 	}
 }
 
-func TestGitHubNextItem(t *testing.T) {
+func TestGitHubNextItems(t *testing.T) {
 	now := time.Now()
 
 	// Build fake issue timeline
@@ -77,22 +77,22 @@ func TestGitHubNextItem(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil, nil)
+	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if err != nil {
-		t.Fatalf("NextItem() error: %v", err)
+		t.Fatalf("NextItems() error: %v", err)
 	}
-	if item == nil {
-		t.Fatal("NextItem() returned nil")
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
-	if item.Title != "Recent issue someone else updated" {
-		t.Errorf("expected issue 20, got %q", item.Title)
+	if items[0].Title != "Recent issue someone else updated" {
+		t.Errorf("expected issue 20, got %q", items[0].Title)
 	}
-	if len(item.Events) == 0 {
+	if len(items[0].Events) == 0 {
 		t.Error("expected at least one event")
 	}
 }
 
-func TestGitHubNextItemIgnoreEvents(t *testing.T) {
+func TestGitHubNextItemsIgnoreEvents(t *testing.T) {
 	now := time.Now()
 
 	issues := []ghIssue{
@@ -149,20 +149,20 @@ func TestGitHubNextItemIgnoreEvents(t *testing.T) {
 
 	ignore := map[string]bool{"mentioned": true, "subscribed": true}
 	gh := NewGitHub(runner)
-	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, ignore, nil)
+	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, ignore, nil, 1)
 	if err != nil {
-		t.Fatalf("NextItem() error: %v", err)
+		t.Fatalf("NextItems() error: %v", err)
 	}
-	if item == nil {
-		t.Fatal("NextItem() returned nil")
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
 	// Issue 1 should be skipped (only has ignored events), should get issue 2
-	if item.Title != "Issue with a real comment" {
-		t.Errorf("expected issue 2, got %q", item.Title)
+	if items[0].Title != "Issue with a real comment" {
+		t.Errorf("expected issue 2, got %q", items[0].Title)
 	}
 }
 
-func TestGitHubNextItemReviewCountsAsTouch(t *testing.T) {
+func TestGitHubNextItemsReviewCountsAsTouch(t *testing.T) {
 	now := time.Now()
 	prMarker := json.RawMessage(`{"url":"https://api.github.com/repos/o/r/pulls/5"}`)
 
@@ -230,20 +230,20 @@ func TestGitHubNextItemReviewCountsAsTouch(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil, nil)
+	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if err != nil {
-		t.Fatalf("NextItem() error: %v", err)
+		t.Fatalf("NextItems() error: %v", err)
 	}
-	if item == nil {
-		t.Fatal("NextItem() returned nil")
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
 	// PR 5 should be skipped because I reviewed it within 30m, should get issue 6
-	if item.Title != "Issue someone else updated" {
-		t.Errorf("expected issue 6, got %q", item.Title)
+	if items[0].Title != "Issue someone else updated" {
+		t.Errorf("expected issue 6, got %q", items[0].Title)
 	}
 }
 
-func TestGitHubNextItemAllTouchedByMe(t *testing.T) {
+func TestGitHubNextItemsAllTouchedByMe(t *testing.T) {
 	now := time.Now()
 
 	issues := []ghIssue{
@@ -274,16 +274,16 @@ func TestGitHubNextItemAllTouchedByMe(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil, nil)
+	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if err != nil {
-		t.Fatalf("NextItem() error: %v", err)
+		t.Fatalf("NextItems() error: %v", err)
 	}
-	if item != nil {
-		t.Errorf("expected nil (nothing to do), got %+v", item)
+	if len(items) != 0 {
+		t.Errorf("expected empty slice (nothing to do), got %+v", items)
 	}
 }
 
-func TestGitHubNextItemIgnoreUsers(t *testing.T) {
+func TestGitHubNextItemsIgnoreUsers(t *testing.T) {
 	now := time.Now()
 
 	issues := []ghIssue{
@@ -332,26 +332,105 @@ func TestGitHubNextItemIgnoreUsers(t *testing.T) {
 	gh := NewGitHub(runner)
 
 	// Without ignoring the bot, the bot's comment is the only event after "me",
-	// but since we ignore the bot user, there are no new events → nil result
+	// but since we ignore the bot user, there are no new events → empty result
 	ignoreUsers := map[string]bool{"qodo-code-review[bot]": true}
-	item, err := gh.NextItem("o", "r", "me", 30*time.Minute, nil, ignoreUsers)
+	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, ignoreUsers, 1)
 	if err != nil {
-		t.Fatalf("NextItem() error: %v", err)
+		t.Fatalf("NextItems() error: %v", err)
 	}
-	if item != nil {
-		t.Errorf("expected nil (bot activity should be ignored), got %+v", item)
+	if len(items) != 0 {
+		t.Errorf("expected empty slice (bot activity should be ignored), got %+v", items)
 	}
 
 	// Without ignoring the bot, we should get the item since the bot's comment
 	// appears as new activity after the user's last touch (which is outside the cooldown)
-	item, err = gh.NextItem("o", "r", "me", 30*time.Minute, nil, nil)
+	items, err = gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if err != nil {
-		t.Fatalf("NextItem() error: %v", err)
+		t.Fatalf("NextItems() error: %v", err)
 	}
-	if item == nil {
-		t.Fatal("expected item when bot is not ignored")
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item when bot is not ignored, got %d", len(items))
 	}
-	if len(item.Events) != 1 || item.Events[0].Author != "qodo-code-review[bot]" {
-		t.Errorf("expected bot event, got %+v", item.Events)
+	if len(items[0].Events) != 1 || items[0].Events[0].Author != "qodo-code-review[bot]" {
+		t.Errorf("expected bot event, got %+v", items[0].Events)
+	}
+}
+
+func TestGitHubNextItemsLimit(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    1,
+			Title:     "First untouched issue",
+			HTMLURL:   "https://github.com/o/r/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+		},
+		{
+			Number:    2,
+			Title:     "Second untouched issue",
+			HTMLURL:   "https://github.com/o/r/issues/2",
+			UpdatedAt: now.Add(-20 * time.Minute),
+		},
+		{
+			Number:    3,
+			Title:     "Third untouched issue",
+			HTMLURL:   "https://github.com/o/r/issues/3",
+			UpdatedAt: now.Add(-30 * time.Minute),
+		},
+	}
+
+	events1 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-10 * time.Minute), Actor: ghActor{Login: "other"}, Body: "first"},
+	}
+	events2 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-20 * time.Minute), Actor: ghActor{Login: "other"}, Body: "second"},
+	}
+	events3 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-30 * time.Minute), Actor: ghActor{Login: "other"}, Body: "third"},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/1/timeline" {
+				return json.Marshal(events1)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/2/timeline" {
+				return json.Marshal(events2)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/3/timeline" {
+				return json.Marshal(events3)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+
+	// limit=2 should return the first 2 matching items
+	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 2)
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("NextItems(limit=2) returned %d items, want 2", len(items))
+	}
+	if items[0].Title != "First untouched issue" {
+		t.Errorf("first item: expected 'First untouched issue', got %q", items[0].Title)
+	}
+	if items[1].Title != "Second untouched issue" {
+		t.Errorf("second item: expected 'Second untouched issue', got %q", items[1].Title)
+	}
+
+	// limit=5 with only 3 available should return all 3
+	items, err = gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("NextItems(limit=5) returned %d items, want 3", len(items))
 	}
 }

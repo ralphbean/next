@@ -89,3 +89,57 @@ func TestFormatItem(t *testing.T) {
 		t.Errorf("expected author in output")
 	}
 }
+
+func TestFormatItems(t *testing.T) {
+	items := []Item{
+		{
+			URL:   "https://github.com/owner/repo/issues/1",
+			Title: "First issue",
+			Events: []Event{
+				{Timestamp: time.Now().Add(-1 * time.Hour), Author: "alice", Summary: "commented: hello"},
+			},
+		},
+		{
+			URL:   "https://github.com/owner/repo/issues/2",
+			Title: "Second issue",
+			Events: []Event{
+				{Timestamp: time.Now().Add(-2 * time.Hour), Author: "bob", Summary: "commented: world"},
+			},
+		},
+	}
+	got := FormatItems(items, 120)
+	if !strings.Contains(got, "First issue") {
+		t.Error("expected first item title in output")
+	}
+	if !strings.Contains(got, "Second issue") {
+		t.Error("expected second item title in output")
+	}
+	if !strings.Contains(got, "@alice") {
+		t.Error("expected first item author in output")
+	}
+	if !strings.Contains(got, "@bob") {
+		t.Error("expected second item author in output")
+	}
+	// Items should be separated by a blank line
+	if !strings.Contains(got, "\n\n") {
+		t.Error("expected blank line separator between items")
+	}
+}
+
+func TestFormatItemsSingle(t *testing.T) {
+	items := []Item{
+		{
+			URL:   "https://github.com/owner/repo/issues/1",
+			Title: "Only issue",
+			Events: []Event{
+				{Timestamp: time.Now().Add(-1 * time.Hour), Author: "alice", Summary: "commented: hi"},
+			},
+		},
+	}
+	got := FormatItems(items, 120)
+	// Single item should not have trailing blank line separator
+	singleGot := FormatItem(items[0], 120)
+	if got != singleGot {
+		t.Errorf("FormatItems with single item should match FormatItem output.\nFormatItems: %q\nFormatItem:  %q", got, singleGot)
+	}
+}

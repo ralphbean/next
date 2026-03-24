@@ -22,7 +22,7 @@ func TestGitLabCurrentUser(t *testing.T) {
 	}
 }
 
-func TestGitLabNextItem(t *testing.T) {
+func TestGitLabNextItems(t *testing.T) {
 	now := time.Now()
 
 	issues := []glIssue{
@@ -95,21 +95,21 @@ func TestGitLabNextItem(t *testing.T) {
 	}
 
 	gl := NewGitLab(runner, "")
-	item, err := gl.NextItem("o", "r", "me", 30*time.Minute, nil, nil)
+	items, err := gl.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if err != nil {
-		t.Fatalf("NextItem() error: %v", err)
+		t.Fatalf("NextItems() error: %v", err)
 	}
-	if item == nil {
-		t.Fatal("NextItem() returned nil")
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
 	// Should pick MR 3 (45m ago, not touched by me) — most recently updated untouched item
 	// Issue 8 was 1h ago, MR 3 was 45m ago, issue 5 was touched by me within 30m
-	if item.Title != "MR from someone" {
-		t.Errorf("expected MR 3, got %q", item.Title)
+	if items[0].Title != "MR from someone" {
+		t.Errorf("expected MR 3, got %q", items[0].Title)
 	}
 }
 
-func TestGitLabNextItemNoneAvailable(t *testing.T) {
+func TestGitLabNextItemsNoneAvailable(t *testing.T) {
 	now := time.Now()
 
 	issues := []glIssue{
@@ -145,11 +145,72 @@ func TestGitLabNextItemNoneAvailable(t *testing.T) {
 	}
 
 	gl := NewGitLab(runner, "")
-	item, err := gl.NextItem("o", "r", "me", 30*time.Minute, nil, nil)
+	items, err := gl.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if err != nil {
-		t.Fatalf("NextItem() error: %v", err)
+		t.Fatalf("NextItems() error: %v", err)
 	}
-	if item != nil {
-		t.Errorf("expected nil, got %+v", item)
+	if len(items) != 0 {
+		t.Errorf("expected empty slice, got %+v", items)
+	}
+}
+
+func TestGitLabNextItemsLimit(t *testing.T) {
+	now := time.Now()
+
+	issues := []glIssue{
+		{
+			IID:       1,
+			Title:     "First issue",
+			WebURL:    "https://gitlab.com/o/r/-/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+		},
+		{
+			IID:       2,
+			Title:     "Second issue",
+			WebURL:    "https://gitlab.com/o/r/-/issues/2",
+			UpdatedAt: now.Add(-20 * time.Minute),
+		},
+	}
+
+	notes1 := []glNote{
+		{Body: "please look", CreatedAt: now.Add(-10 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+	}
+	notes2 := []glNote{
+		{Body: "needs review", CreatedAt: now.Add(-20 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.HasPrefix(a, "projects/o%2Fr/merge_requests?") {
+				return json.Marshal([]glMR{})
+			}
+			if a == "projects/o%2Fr/issues/1/notes" {
+				return json.Marshal(notes1)
+			}
+			if a == "projects/o%2Fr/issues/2/notes" {
+				return json.Marshal(notes2)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+
+	// limit=2 should return both items
+	items, err := gl.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 2)
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("NextItems(limit=2) returned %d items, want 2", len(items))
+	}
+	if items[0].Title != "First issue" {
+		t.Errorf("first item: expected 'First issue', got %q", items[0].Title)
+	}
+	if items[1].Title != "Second issue" {
+		t.Errorf("second item: expected 'Second issue', got %q", items[1].Title)
 	}
 }
