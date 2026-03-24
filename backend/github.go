@@ -15,10 +15,10 @@ type ghActor struct {
 }
 
 type ghIssue struct {
-	Number    int       `json:"number"`
-	Title     string    `json:"title"`
-	HTMLURL   string    `json:"html_url"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Number      int              `json:"number"`
+	Title       string           `json:"title"`
+	HTMLURL     string           `json:"html_url"`
+	UpdatedAt   time.Time        `json:"updated_at"`
 	PullRequest *json.RawMessage `json:"pull_request,omitempty"`
 }
 
@@ -60,7 +60,7 @@ func (g *gitHub) CurrentUser() (string, error) {
 	return u.Login, nil
 }
 
-func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool, ignoreUsers map[string]bool) (*format.Item, error) {
+func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool, ignoreUsers map[string]bool, limit int) ([]format.Item, error) {
 	// Fetch first page of issues (includes PRs) sorted by updated
 	endpoint := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
 	out, err := g.run("gh", "api", endpoint,
@@ -119,6 +119,7 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 	}
 	wg.Wait()
 
+	var result []format.Item
 	for i, issue := range issues {
 		if fetched[i].err != nil {
 			return nil, fetched[i].err
@@ -218,14 +219,17 @@ func (g *gitHub) NextItem(owner, repo, user string, since time.Duration, ignoreE
 			continue
 		}
 
-		return &format.Item{
+		result = append(result, format.Item{
 			URL:    issue.HTMLURL,
 			Title:  issue.Title,
 			Events: fmtEvents,
-		}, nil
+		})
+		if len(result) >= limit {
+			break
+		}
 	}
 
-	return nil, nil
+	return result, nil
 }
 
 func (g *gitHub) getTimeline(owner, repo string, number int) ([]ghTimelineEvent, error) {

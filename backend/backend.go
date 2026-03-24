@@ -12,5 +12,5 @@ type CmdRunner func(name string, args ...string) ([]byte, error)
 // Backend fetches issues/PRs from a hosting platform.
 type Backend interface {
 	CurrentUser() (string, error)
-	NextItem(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool, ignoreUsers map[string]bool) (*format.Item, error)
+	NextItems(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool, ignoreUsers map[string]bool, limit int) ([]format.Item, error)
 }

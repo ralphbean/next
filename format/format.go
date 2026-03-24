@@ -58,3 +58,15 @@ func FormatItem(item Item, maxWidth int) string {
 	}
 	return b.String()
 }
+
+// FormatItems formats multiple items, separated by blank lines.
+func FormatItems(items []Item, maxWidth int) string {
+	var b strings.Builder
+	for i, item := range items {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(FormatItem(item, maxWidth))
+	}
+	return b.String()
+}

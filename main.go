@@ -49,11 +49,16 @@ func run() error {
 	sinceStr := flag.String("since", "30m", "cooldown before showing items you recently touched (e.g., 30m, 1h, 3d)")
 	ignoreStr := flag.String("ignore-events", "mentioned,subscribed", "comma-separated list of timeline event types to ignore")
 	ignoreUsersStr := flag.String("ignore-users", "", "comma-separated list of users to ignore when determining activity")
+	limit := flag.Int("limit", 1, "maximum number of items to show")
 	flag.Parse()
 
 	since, err := parseSince(*sinceStr)
 	if err != nil {
 		return fmt.Errorf("invalid --since value: %w", err)
+	}
+
+	if *limit < 1 {
+		return fmt.Errorf("invalid --limit value: must be at least 1")
 	}
 
 	gitlabHost := os.Getenv("GITLAB_HOST")
@@ -78,18 +83,18 @@ func run() error {
 
 	ignore := parseIgnoreEvents(*ignoreStr)
 	ignoreUsers := parseIgnoreEvents(*ignoreUsersStr)
-	item, err := b.NextItem(info.Owner, info.Name, user, since, ignore, ignoreUsers)
+	items, err := b.NextItems(info.Owner, info.Name, user, since, ignore, ignoreUsers, *limit)
 	if err != nil {
 		return err
 	}
 
-	if item == nil {
+	if len(items) == 0 {
 		fmt.Println("Nothing to do! All items were recently touched by you.")
 		return nil
 	}
 
 	width := getTerminalWidth()
-	fmt.Print(format.FormatItem(*item, width))
+	fmt.Print(format.FormatItems(items, width))
 
 	return nil
 }
