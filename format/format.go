@@ -59,14 +59,29 @@ func FormatItem(item Item, maxWidth int) string {
 	return b.String()
 }
 
-// FormatItems formats multiple items, separated by blank lines.
+// FormatItems formats multiple items. When there are multiple items, each is
+// prefixed with a bullet character and items are separated by a horizontal line.
 func FormatItems(items []Item, maxWidth int) string {
 	var b strings.Builder
+	if len(items) == 1 {
+		b.WriteString(FormatItem(items[0], maxWidth))
+		return b.String()
+	}
+	// Build a separator line that spans the terminal width
+	sepWidth := maxWidth
+	if sepWidth > 40 {
+		sepWidth = 40
+	}
+	separator := strings.Repeat("─", sepWidth)
 	for i, item := range items {
 		if i > 0 {
-			b.WriteString("\n")
+			fmt.Fprintf(&b, "  %s\n", separator)
 		}
-		b.WriteString(FormatItem(item, maxWidth))
+		fmt.Fprintf(&b, "▶ %s\n", item.URL)
+		fmt.Fprintf(&b, "  %s\n", item.Title)
+		for _, e := range item.Events {
+			fmt.Fprintf(&b, "    %s\n", FormatEvent(e, maxWidth-4))
+		}
 	}
 	return b.String()
 }
