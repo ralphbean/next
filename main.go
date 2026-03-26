@@ -47,7 +47,7 @@ func defaultRunner(name string, args ...string) ([]byte, error) {
 
 func run() error {
 	sinceStr := flag.String("since", "30m", "cooldown before showing items you recently touched (e.g., 30m, 1h, 3d)")
-	ignoreStr := flag.String("ignore-events", "mentioned,subscribed", "comma-separated list of timeline event types to ignore")
+	ignoreStr := flag.String("ignore-events", "labeled,unlabeled,mentioned,subscribed,assigned,cross-referenced,project_v2_item_status_changed", "comma-separated list of timeline event types to ignore")
 	ignoreUsersStr := flag.String("ignore-users", "", "comma-separated list of users to ignore when determining activity")
 	limit := flag.Int("limit", 1, "maximum number of items to show")
 	flag.Parse()
