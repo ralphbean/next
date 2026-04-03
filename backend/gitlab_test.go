@@ -272,3 +272,62 @@ func TestGitLabNextItemsUntouchedByAnyone(t *testing.T) {
 		t.Errorf("expected author 'other', got %q", items[0].Events[0].Author)
 	}
 }
+
+func TestGitLabNextItemsApprovalNote(t *testing.T) {
+	now := time.Now()
+
+	issues := []glIssue{}
+	mrs := []glMR{
+		{
+			IID:       20,
+			Title:     "MR that was approved",
+			WebURL:    "https://gitlab.com/o/r/-/merge_requests/20",
+			CreatedAt: now.Add(-2 * time.Hour),
+			UpdatedAt: now.Add(-10 * time.Minute),
+			Author:    glNoteAuthor{Username: "me"},
+		},
+	}
+
+	// The approval shows up as a system note
+	notesMR20 := []glNote{
+		{
+			Body:      "approved this merge request",
+			CreatedAt: now.Add(-10 * time.Minute),
+			Author:    glNoteAuthor{Username: "reviewer"},
+			System:    true,
+		},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.HasPrefix(a, "projects/o%2Fr/merge_requests?") {
+				return json.Marshal(mrs)
+			}
+			if a == "projects/o%2Fr/merge_requests/20/notes" {
+				return json.Marshal(notesMR20)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	items, err := gl.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
+	}
+	if len(items[0].Events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(items[0].Events))
+	}
+	if items[0].Events[0].Summary != "approved" {
+		t.Errorf("expected 'approved' summary, got %q", items[0].Events[0].Summary)
+	}
+	if items[0].Events[0].Author != "reviewer" {
+		t.Errorf("expected author 'reviewer', got %q", items[0].Events[0].Author)
+	}
+}

@@ -219,14 +219,7 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			if !lastUserTime.IsZero() && r.SubmittedAt.Before(lastUserTime) {
 				continue
 			}
-			summary := fmt.Sprintf("reviewed (%s)", r.State)
-			if r.Body != "" {
-				body := r.Body
-				if r := []rune(body); len(r) > 60 {
-					body = string(r[:60])
-				}
-				summary = fmt.Sprintf("reviewed (%s): > %s", r.State, body)
-			}
+			summary := reviewSummary(r.State, r.Body)
 			fmtEvents = append(fmtEvents, format.Event{
 				Timestamp: r.SubmittedAt,
 				Author:    r.User.Login,
@@ -285,6 +278,28 @@ func (g *gitHub) getReviews(owner, repo string, number int) ([]ghReview, error) 
 		return nil, fmt.Errorf("failed to parse reviews: %w", err)
 	}
 	return reviews, nil
+}
+
+func reviewSummary(state, body string) string {
+	switch state {
+	case "APPROVED":
+		if body != "" {
+			if r := []rune(body); len(r) > 60 {
+				body = string(r[:60])
+			}
+			return fmt.Sprintf("approved: > %s", body)
+		}
+		return "approved"
+	default:
+		summary := fmt.Sprintf("reviewed (%s)", state)
+		if body != "" {
+			if r := []rune(body); len(r) > 60 {
+				body = string(r[:60])
+			}
+			summary = fmt.Sprintf("reviewed (%s): > %s", state, body)
+		}
+		return summary
+	}
 }
 
 func eventSummary(event, body string) string {

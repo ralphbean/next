@@ -491,3 +491,58 @@ func TestGitHubNextItemsUntouchedByAnyone(t *testing.T) {
 		t.Errorf("expected author 'other', got %q", items[0].Events[0].Author)
 	}
 }
+
+func TestGitHubNextItemsApprovalSummary(t *testing.T) {
+	now := time.Now()
+	prMarker := json.RawMessage(`{"url":"https://api.github.com/repos/o/r/pulls/7"}`)
+
+	issues := []ghIssue{
+		{
+			Number:      7,
+			Title:       "PR that was approved",
+			HTMLURL:     "https://github.com/o/r/pull/7",
+			UpdatedAt:   now.Add(-10 * time.Minute),
+			User:        ghActor{Login: "me"},
+			PullRequest: &prMarker,
+		},
+	}
+
+	events7 := []ghTimelineEvent{}
+	reviews7 := []ghReview{
+		{
+			User:        ghActor{Login: "reviewer"},
+			State:       "APPROVED",
+			SubmittedAt: now.Add(-10 * time.Minute),
+		},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/7/timeline" {
+				return json.Marshal(events7)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/pulls/7/reviews" {
+				return json.Marshal(reviews7)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
+	}
+	if len(items[0].Events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(items[0].Events))
+	}
+	if items[0].Events[0].Summary != "approved" {
+		t.Errorf("expected 'approved' summary, got %q", items[0].Events[0].Summary)
+	}
+}

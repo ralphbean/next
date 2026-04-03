@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -172,6 +173,9 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 			if ignoreUsers[n.Author.Username] {
 				continue
 			}
+			if n.System && !isApprovalNote(n.Body) {
+				continue
+			}
 			if n.Author.Username == user && n.CreatedAt.After(cutoff) {
 				userTouched = true
 				break
@@ -186,6 +190,9 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 			if ignoreUsers[n.Author.Username] {
 				continue
 			}
+			if n.System && !isApprovalNote(n.Body) {
+				continue
+			}
 			if n.Author.Username == user && n.CreatedAt.After(lastUserTime) {
 				lastUserTime = n.CreatedAt
 			}
@@ -193,7 +200,10 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 
 		othersHaveActivity := false
 		for _, n := range notes {
-			if n.Author.Username != user && !n.System && !ignoreUsers[n.Author.Username] {
+			if n.Author.Username == user || ignoreUsers[n.Author.Username] {
+				continue
+			}
+			if !n.System || isApprovalNote(n.Body) {
 				othersHaveActivity = true
 				break
 			}
@@ -201,20 +211,29 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 
 		var fmtEvents []format.Event
 		for _, n := range notes {
-			if n.Author.Username == user || n.System || ignoreUsers[n.Author.Username] {
+			if n.Author.Username == user || ignoreUsers[n.Author.Username] {
+				continue
+			}
+			if n.System && !isApprovalNote(n.Body) {
 				continue
 			}
 			if !lastUserTime.IsZero() && n.CreatedAt.Before(lastUserTime) {
 				continue
 			}
-			body := n.Body
-			if r := []rune(body); len(r) > 80 {
-				body = string(r[:80])
+			var summary string
+			if isApprovalNote(n.Body) {
+				summary = "approved"
+			} else {
+				body := n.Body
+				if r := []rune(body); len(r) > 80 {
+					body = string(r[:80])
+				}
+				summary = fmt.Sprintf("commented: > %s", body)
 			}
 			fmtEvents = append(fmtEvents, format.Event{
 				Timestamp: n.CreatedAt,
 				Author:    n.Author.Username,
-				Summary:   fmt.Sprintf("commented: > %s", body),
+				Summary:   summary,
 			})
 		}
 
@@ -266,6 +285,10 @@ func (g *gitLab) listMRs(projectPath string) ([]glMR, error) {
 		return nil, fmt.Errorf("failed to parse GitLab MRs: %w", err)
 	}
 	return mrs, nil
+}
+
+func isApprovalNote(body string) bool {
+	return strings.Contains(body, "approved this merge request")
 }
 
 func (g *gitLab) getNotes(projectPath, kind string, iid int) ([]glNote, error) {
