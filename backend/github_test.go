@@ -434,3 +434,60 @@ func TestGitHubNextItemsLimit(t *testing.T) {
 		t.Fatalf("NextItems(limit=5) returned %d items, want 3", len(items))
 	}
 }
+
+func TestGitHubNextItemsUntouchedByAnyone(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    42,
+			Title:     "Brand new issue from someone else",
+			HTMLURL:   "https://github.com/o/r/issues/42",
+			CreatedAt: now.Add(-2 * time.Hour),
+			UpdatedAt: now.Add(-2 * time.Hour),
+			User:      ghActor{Login: "other"},
+		},
+		{
+			Number:    43,
+			Title:     "My own issue with no activity",
+			HTMLURL:   "https://github.com/o/r/issues/43",
+			CreatedAt: now.Add(-3 * time.Hour),
+			UpdatedAt: now.Add(-3 * time.Hour),
+			User:      ghActor{Login: "me"},
+		},
+	}
+
+	// Both issues have empty timelines — no one has interacted
+	emptyEvents := []ghTimelineEvent{}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+		}
+		return json.Marshal(emptyEvents)
+	}
+
+	gh := NewGitHub(runner)
+	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	// Should include the issue filed by "other" but not the one filed by "me"
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
+	}
+	if items[0].Title != "Brand new issue from someone else" {
+		t.Errorf("expected issue 42, got %q", items[0].Title)
+	}
+	if len(items[0].Events) != 1 {
+		t.Fatalf("expected 1 synthetic event, got %d", len(items[0].Events))
+	}
+	if items[0].Events[0].Summary != "opened" {
+		t.Errorf("expected 'opened' event, got %q", items[0].Events[0].Summary)
+	}
+	if items[0].Events[0].Author != "other" {
+		t.Errorf("expected author 'other', got %q", items[0].Events[0].Author)
+	}
+}

@@ -36,17 +36,21 @@ type glNote struct {
 }
 
 type glIssue struct {
-	IID       int       `json:"iid"`
-	Title     string    `json:"title"`
-	WebURL    string    `json:"web_url"`
-	UpdatedAt time.Time `json:"updated_at"`
+	IID       int          `json:"iid"`
+	Title     string       `json:"title"`
+	WebURL    string       `json:"web_url"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
+	Author    glNoteAuthor `json:"author"`
 }
 
 type glMR struct {
-	IID       int       `json:"iid"`
-	Title     string    `json:"title"`
-	WebURL    string    `json:"web_url"`
-	UpdatedAt time.Time `json:"updated_at"`
+	IID       int          `json:"iid"`
+	Title     string       `json:"title"`
+	WebURL    string       `json:"web_url"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
+	Author    glNoteAuthor `json:"author"`
 }
 
 type glUser struct {
@@ -58,7 +62,9 @@ type glItem struct {
 	IID       int
 	Title     string
 	WebURL    string
+	CreatedAt time.Time
 	UpdatedAt time.Time
+	Author    string
 	Kind      string // "issues" or "merge_requests"
 }
 
@@ -117,13 +123,15 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 	for _, iss := range issues {
 		items = append(items, glItem{
 			IID: iss.IID, Title: iss.Title, WebURL: iss.WebURL,
-			UpdatedAt: iss.UpdatedAt, Kind: "issues",
+			CreatedAt: iss.CreatedAt, UpdatedAt: iss.UpdatedAt,
+			Author: iss.Author.Username, Kind: "issues",
 		})
 	}
 	for _, mr := range mrs {
 		items = append(items, glItem{
 			IID: mr.IID, Title: mr.Title, WebURL: mr.WebURL,
-			UpdatedAt: mr.UpdatedAt, Kind: "merge_requests",
+			CreatedAt: mr.CreatedAt, UpdatedAt: mr.UpdatedAt,
+			Author: mr.Author.Username, Kind: "merge_requests",
 		})
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -183,6 +191,14 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 			}
 		}
 
+		othersHaveActivity := false
+		for _, n := range notes {
+			if n.Author.Username != user && !n.System && !ignoreUsers[n.Author.Username] {
+				othersHaveActivity = true
+				break
+			}
+		}
+
 		var fmtEvents []format.Event
 		for _, n := range notes {
 			if n.Author.Username == user || n.System || ignoreUsers[n.Author.Username] {
@@ -199,6 +215,17 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 				Timestamp: n.CreatedAt,
 				Author:    n.Author.Username,
 				Summary:   fmt.Sprintf("commented: > %s", body),
+			})
+		}
+
+		if len(fmtEvents) == 0 {
+			if othersHaveActivity || item.Author == user || ignoreUsers[item.Author] {
+				continue
+			}
+			fmtEvents = append(fmtEvents, format.Event{
+				Timestamp: item.CreatedAt,
+				Author:    item.Author,
+				Summary:   "opened",
 			})
 		}
 

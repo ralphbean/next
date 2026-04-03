@@ -18,7 +18,9 @@ type ghIssue struct {
 	Number      int              `json:"number"`
 	Title       string           `json:"title"`
 	HTMLURL     string           `json:"html_url"`
+	CreatedAt   time.Time        `json:"created_at"`
 	UpdatedAt   time.Time        `json:"updated_at"`
+	User        ghActor          `json:"user"`
 	PullRequest *json.RawMessage `json:"pull_request,omitempty"`
 }
 
@@ -172,6 +174,23 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			}
 		}
 
+		// Check if any non-user, non-ignored actor has any activity at all
+		othersHaveActivity := false
+		for _, ev := range events {
+			if ev.Actor.Login != "" && ev.Actor.Login != user && !ignoreUsers[ev.Actor.Login] {
+				othersHaveActivity = true
+				break
+			}
+		}
+		if !othersHaveActivity {
+			for _, r := range reviews {
+				if r.User.Login != user && !ignoreUsers[r.User.Login] {
+					othersHaveActivity = true
+					break
+				}
+			}
+		}
+
 		var fmtEvents []format.Event
 		for _, ev := range events {
 			if ev.Actor.Login == "" || ev.CreatedAt.IsZero() {
@@ -216,7 +235,17 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		}
 
 		if len(fmtEvents) == 0 {
-			continue
+			// If others have activity that got filtered out, skip this item.
+			// If no one else has touched it and it was filed by someone else,
+			// include a synthetic "opened" event so it still surfaces.
+			if othersHaveActivity || issue.User.Login == user || ignoreUsers[issue.User.Login] {
+				continue
+			}
+			fmtEvents = append(fmtEvents, format.Event{
+				Timestamp: issue.CreatedAt,
+				Author:    issue.User.Login,
+				Summary:   "opened",
+			})
 		}
 
 		result = append(result, format.Item{

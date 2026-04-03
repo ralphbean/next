@@ -214,3 +214,61 @@ func TestGitLabNextItemsLimit(t *testing.T) {
 		t.Errorf("second item: expected 'Second issue', got %q", items[1].Title)
 	}
 }
+
+func TestGitLabNextItemsUntouchedByAnyone(t *testing.T) {
+	now := time.Now()
+
+	issues := []glIssue{
+		{
+			IID:       10,
+			Title:     "New issue from someone else",
+			WebURL:    "https://gitlab.com/o/r/-/issues/10",
+			CreatedAt: now.Add(-2 * time.Hour),
+			UpdatedAt: now.Add(-2 * time.Hour),
+			Author:    glNoteAuthor{Username: "other"},
+		},
+		{
+			IID:       11,
+			Title:     "My own issue with no notes",
+			WebURL:    "https://gitlab.com/o/r/-/issues/11",
+			CreatedAt: now.Add(-3 * time.Hour),
+			UpdatedAt: now.Add(-3 * time.Hour),
+			Author:    glNoteAuthor{Username: "me"},
+		},
+	}
+
+	emptyNotes := []glNote{}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.HasPrefix(a, "projects/o%2Fr/merge_requests?") {
+				return json.Marshal([]glMR{})
+			}
+		}
+		return json.Marshal(emptyNotes)
+	}
+
+	gl := NewGitLab(runner, "")
+	items, err := gl.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
+	}
+	if items[0].Title != "New issue from someone else" {
+		t.Errorf("expected issue 10, got %q", items[0].Title)
+	}
+	if len(items[0].Events) != 1 {
+		t.Fatalf("expected 1 synthetic event, got %d", len(items[0].Events))
+	}
+	if items[0].Events[0].Summary != "opened" {
+		t.Errorf("expected 'opened' event, got %q", items[0].Events[0].Summary)
+	}
+	if items[0].Events[0].Author != "other" {
+		t.Errorf("expected author 'other', got %q", items[0].Events[0].Author)
+	}
+}
