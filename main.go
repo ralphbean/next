@@ -19,18 +19,18 @@ func parseSince(s string) (time.Duration, error) {
 	return duration.Parse(s)
 }
 
-func parseIgnoreEvents(s string) map[string]bool {
-	m := make(map[string]bool)
+func parsePatterns(s string) backend.MatchSet {
 	if s == "" {
-		return m
+		return nil
 	}
+	var patterns backend.MatchSet
 	for _, e := range strings.Split(s, ",") {
 		e = strings.TrimSpace(e)
 		if e != "" {
-			m[e] = true
+			patterns = append(patterns, e)
 		}
 	}
-	return m
+	return patterns
 }
 
 func getTerminalWidth() int {
@@ -47,8 +47,8 @@ func defaultRunner(name string, args ...string) ([]byte, error) {
 
 func run() error {
 	sinceStr := flag.String("since", "30m", "cooldown before showing items you recently touched (e.g., 30m, 1h, 3d)")
-	ignoreStr := flag.String("ignore-events", "labeled,unlabeled,mentioned,subscribed,assigned,cross-referenced,project_v2_item_status_changed", "comma-separated list of timeline event types to ignore")
-	ignoreUsersStr := flag.String("ignore-users", "", "comma-separated list of users to ignore when determining activity")
+	ignoreStr := flag.String("ignore-events", "labeled,unlabeled,mentioned,subscribed,assigned,cross-referenced,project_v2_item_status_changed", "comma-separated list of event patterns to ignore (supports * wildcards)")
+	ignoreUsersStr := flag.String("ignore-users", "*[bot]", "comma-separated list of user patterns to ignore (supports * wildcards)")
 	limit := flag.Int("limit", 1, "maximum number of items to show")
 	flag.Parse()
 
@@ -81,8 +81,8 @@ func run() error {
 		return fmt.Errorf("failed to determine current user: %w", err)
 	}
 
-	ignore := parseIgnoreEvents(*ignoreStr)
-	ignoreUsers := parseIgnoreEvents(*ignoreUsersStr)
+	ignore := parsePatterns(*ignoreStr)
+	ignoreUsers := parsePatterns(*ignoreUsersStr)
 	items, err := b.NextItems(info.Owner, info.Name, user, since, ignore, ignoreUsers, *limit)
 	if err != nil {
 		return err

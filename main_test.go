@@ -34,26 +34,27 @@ func TestParseSinceFlagInvalid(t *testing.T) {
 	}
 }
 
-func TestParseIgnoreEvents(t *testing.T) {
+func TestParsePatterns(t *testing.T) {
 	tests := []struct {
 		input string
-		want  map[string]bool
+		want  []string
 	}{
-		{"mentioned,subscribed", map[string]bool{"mentioned": true, "subscribed": true}},
-		{"", map[string]bool{}},
-		{"mentioned", map[string]bool{"mentioned": true}},
-		{" mentioned , subscribed ", map[string]bool{"mentioned": true, "subscribed": true}},
+		{"mentioned,subscribed", []string{"mentioned", "subscribed"}},
+		{"", nil},
+		{"mentioned", []string{"mentioned"}},
+		{" mentioned , subscribed ", []string{"mentioned", "subscribed"}},
+		{"*[bot]", []string{"*[bot]"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := parseIgnoreEvents(tt.input)
+			got := parsePatterns(tt.input)
 			if len(got) != len(tt.want) {
-				t.Errorf("parseIgnoreEvents(%q) = %v, want %v", tt.input, got, tt.want)
+				t.Errorf("parsePatterns(%q) = %v, want %v", tt.input, got, tt.want)
 				return
 			}
-			for k := range tt.want {
-				if !got[k] {
-					t.Errorf("parseIgnoreEvents(%q) missing key %q", tt.input, k)
+			for i, w := range tt.want {
+				if got[i] != w {
+					t.Errorf("parsePatterns(%q)[%d] = %q, want %q", tt.input, i, got[i], w)
 				}
 			}
 		})

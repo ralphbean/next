@@ -94,7 +94,7 @@ func (g *gitLab) CurrentUser() (string, error) {
 	return u.Username, nil
 }
 
-func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool, ignoreUsers map[string]bool, limit int) ([]format.Item, error) {
+func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int) ([]format.Item, error) {
 	projectPath := url.PathEscape(owner + "/" + repo)
 
 	// Fetch issues and MRs in parallel
@@ -170,7 +170,7 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 
 		userTouched := false
 		for _, n := range notes {
-			if ignoreUsers[n.Author.Username] {
+			if ignoreUsers.Match(n.Author.Username) {
 				continue
 			}
 			if n.System && !isApprovalNote(n.Body) {
@@ -187,7 +187,7 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 
 		var lastUserTime time.Time
 		for _, n := range notes {
-			if ignoreUsers[n.Author.Username] {
+			if ignoreUsers.Match(n.Author.Username) {
 				continue
 			}
 			if n.System && !isApprovalNote(n.Body) {
@@ -200,7 +200,7 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 
 		othersHaveActivity := false
 		for _, n := range notes {
-			if n.Author.Username == user || ignoreUsers[n.Author.Username] {
+			if n.Author.Username == user || ignoreUsers.Match(n.Author.Username) {
 				continue
 			}
 			if !n.System || isApprovalNote(n.Body) {
@@ -211,7 +211,7 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 
 		var fmtEvents []format.Event
 		for _, n := range notes {
-			if n.Author.Username == user || ignoreUsers[n.Author.Username] {
+			if n.Author.Username == user || ignoreUsers.Match(n.Author.Username) {
 				continue
 			}
 			if n.System && !isApprovalNote(n.Body) {
@@ -238,7 +238,7 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 		}
 
 		if len(fmtEvents) == 0 {
-			if othersHaveActivity || item.Author == user || ignoreUsers[item.Author] {
+			if othersHaveActivity || item.Author == user || ignoreUsers.Match(item.Author) {
 				continue
 			}
 			fmtEvents = append(fmtEvents, format.Event{
