@@ -42,7 +42,14 @@ func getTerminalWidth() int {
 }
 
 func defaultRunner(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
+	cmd := exec.Command(name, args...)
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return out, fmt.Errorf("%s: %s", err, ee.Stderr)
+		}
+	}
+	return out, err
 }
 
 func run() error {
