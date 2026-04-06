@@ -135,6 +135,9 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			if ignoreUsers[ev.Actor.Login] {
 				continue
 			}
+			if ignoreEvents[ev.Event] {
+				continue
+			}
 			if ev.Actor.Login != "" && ev.Actor.Login == user && ev.CreatedAt.After(cutoff) {
 				userTouched = true
 				break
@@ -159,6 +162,9 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		var lastUserTime time.Time
 		for _, ev := range events {
 			if ignoreUsers[ev.Actor.Login] {
+				continue
+			}
+			if ignoreEvents[ev.Event] {
 				continue
 			}
 			if ev.Actor.Login == user && ev.CreatedAt.After(lastUserTime) {
