@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/rbean/next-up/format"
@@ -104,69 +103,35 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 
 	cutoff := time.Now().Add(-since)
 
-	// Prefetch timeline and reviews in parallel for all issues
-	type prefetch struct {
-		events                 []ghTimelineEvent
-		reviews                []ghReview
-		reactions              []ghReaction
-		commentReactions       []ghReaction
-		reviewCommentReactions []ghReaction
-		err                    error
-	}
-	fetched := make([]prefetch, len(issues))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 5)
-	for i, issue := range issues {
-		wg.Add(1)
-		go func(i int, issue ghIssue) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			events, err := g.getTimeline(owner, repo, issue.Number)
-			if err != nil {
-				fetched[i].err = err
-				return
-			}
-			fetched[i].events = events
-			reactions, err := g.getReactions(owner, repo, issue.Number)
-			if err != nil {
-				fetched[i].err = err
-				return
-			}
-			fetched[i].reactions = reactions
-			commentReactions, err := g.getCommentReactions(owner, repo, issue.Number)
-			if err != nil {
-				fetched[i].err = err
-				return
-			}
-			fetched[i].commentReactions = commentReactions
-			if issue.PullRequest != nil {
-				reviews, err := g.getReviews(owner, repo, issue.Number)
-				if err != nil {
-					fetched[i].err = err
-					return
-				}
-				fetched[i].reviews = reviews
-				reviewCommentReactions, err := g.getReviewCommentReactions(owner, repo, issue.Number)
-				if err != nil {
-					fetched[i].err = err
-					return
-				}
-				fetched[i].reviewCommentReactions = reviewCommentReactions
-			}
-		}(i, issue)
-	}
-	wg.Wait()
-
 	var result []format.Item
-	for i, issue := range issues {
-		if fetched[i].err != nil {
-			return nil, fetched[i].err
+	for _, issue := range issues {
+		// Fetch details lazily per issue to avoid rate limiting
+		events, err := g.getTimeline(owner, repo, issue.Number)
+		if err != nil {
+			return nil, err
 		}
-		events := fetched[i].events
-		reviews := fetched[i].reviews
-		reactions := append(fetched[i].reactions, fetched[i].commentReactions...)
-		reactions = append(reactions, fetched[i].reviewCommentReactions...)
+		issueReactions, err := g.getReactions(owner, repo, issue.Number)
+		if err != nil {
+			return nil, err
+		}
+		commentReactions, err := g.getCommentReactions(owner, repo, issue.Number)
+		if err != nil {
+			return nil, err
+		}
+		var reviews []ghReview
+		var reviewCommentReactions []ghReaction
+		if issue.PullRequest != nil {
+			reviews, err = g.getReviews(owner, repo, issue.Number)
+			if err != nil {
+				return nil, err
+			}
+			reviewCommentReactions, err = g.getReviewCommentReactions(owner, repo, issue.Number)
+			if err != nil {
+				return nil, err
+			}
+		}
+		reactions := append(issueReactions, commentReactions...)
+		reactions = append(reactions, reviewCommentReactions...)
 
 		// Check if user interacted within the since window
 		userTouched := false
