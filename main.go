@@ -47,7 +47,7 @@ func defaultRunner(name string, args ...string) ([]byte, error) {
 
 func run() error {
 	sinceStr := flag.String("since", "30m", "cooldown before showing items you recently touched (e.g., 30m, 1h, 3d)")
-	ignoreStr := flag.String("ignore-events", "labeled,unlabeled,mentioned,subscribed,assigned,referenced,cross-referenced,project_v2_item_status_changed", "comma-separated list of event patterns to ignore (supports * wildcards)")
+	ignoreStr := flag.String("ignore-events", "labeled,unlabeled,mentioned,subscribed,assigned,referenced,cross-referenced,head_ref_force_pushed,convert_to_draft,project_v2_item_status_changed", "comma-separated list of event patterns to ignore (supports * wildcards)")
 	ignoreUsersStr := flag.String("ignore-users", "*[bot]", "comma-separated list of user patterns to ignore (supports * wildcards)")
 	limit := flag.Int("limit", 1, "maximum number of items to show")
 	flag.Parse()
