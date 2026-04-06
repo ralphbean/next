@@ -106,11 +106,12 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 
 	// Prefetch timeline and reviews in parallel for all issues
 	type prefetch struct {
-		events           []ghTimelineEvent
-		reviews          []ghReview
-		reactions        []ghReaction
-		commentReactions []ghReaction
-		err              error
+		events                 []ghTimelineEvent
+		reviews                []ghReview
+		reactions              []ghReaction
+		commentReactions       []ghReaction
+		reviewCommentReactions []ghReaction
+		err                    error
 	}
 	fetched := make([]prefetch, len(issues))
 	var wg sync.WaitGroup
@@ -146,6 +147,12 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 					return
 				}
 				fetched[i].reviews = reviews
+				reviewCommentReactions, err := g.getReviewCommentReactions(owner, repo, issue.Number)
+				if err != nil {
+					fetched[i].err = err
+					return
+				}
+				fetched[i].reviewCommentReactions = reviewCommentReactions
 			}
 		}(i, issue)
 	}
@@ -159,6 +166,7 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		events := fetched[i].events
 		reviews := fetched[i].reviews
 		reactions := append(fetched[i].reactions, fetched[i].commentReactions...)
+		reactions = append(reactions, fetched[i].reviewCommentReactions...)
 
 		// Check if user interacted within the since window
 		userTouched := false
@@ -348,6 +356,35 @@ func (g *gitHub) getCommentReactions(owner, repo string, number int) ([]ghReacti
 		var reactions []ghReaction
 		if err := json.Unmarshal(out, &reactions); err != nil {
 			return nil, fmt.Errorf("failed to parse comment reactions: %w", err)
+		}
+		all = append(all, reactions...)
+	}
+	return all, nil
+}
+
+func (g *gitHub) getReviewCommentReactions(owner, repo string, number int) ([]ghReaction, error) {
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/comments", owner, repo, number)
+	out, err := g.run("gh", "api", endpoint, "--paginate")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get review comments for #%d: %w", number, err)
+	}
+	var comments []ghComment
+	if err := json.Unmarshal(out, &comments); err != nil {
+		return nil, fmt.Errorf("failed to parse review comments: %w", err)
+	}
+	var all []ghReaction
+	for _, c := range comments {
+		if c.Reactions.TotalCount == 0 {
+			continue
+		}
+		ep := fmt.Sprintf("repos/%s/%s/pulls/comments/%d/reactions", owner, repo, c.ID)
+		out, err := g.run("gh", "api", ep, "--paginate")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get reactions for review comment %d: %w", c.ID, err)
+		}
+		var reactions []ghReaction
+		if err := json.Unmarshal(out, &reactions); err != nil {
+			return nil, fmt.Errorf("failed to parse review comment reactions: %w", err)
 		}
 		all = append(all, reactions...)
 	}
