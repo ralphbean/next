@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -872,5 +873,78 @@ func TestGitHubReviewCommentReactionMarksTouched(t *testing.T) {
 	}
 	if items[0].Title != "Issue I have not touched" {
 		t.Errorf("expected issue 71, got %q", items[0].Title)
+	}
+}
+
+func TestGitHubRetryOnRateLimit(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    80,
+			Title:     "Some issue",
+			HTMLURL:   "https://github.com/o/r/issues/80",
+			CreatedAt: now.Add(-2 * time.Hour),
+			UpdatedAt: now.Add(-5 * time.Minute),
+			User:      ghActor{Login: "other"},
+		},
+	}
+	events80 := []ghTimelineEvent{
+		{
+			Event:     "commented",
+			CreatedAt: now.Add(-10 * time.Minute),
+			Actor:     ghActor{Login: "other"},
+			Body:      "hello",
+		},
+	}
+
+	// Simulate rate limit on first timeline call, then succeed on retry
+	var timelineCalls atomic.Int32
+	resetTime := time.Now().Add(1 * time.Second)
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if a == "rate_limit" {
+				rl := struct {
+					Rate struct {
+						Remaining int   `json:"remaining"`
+						Reset     int64 `json:"reset"`
+					} `json:"rate"`
+				}{}
+				rl.Rate.Reset = resetTime.Unix()
+				return json.Marshal(rl)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/80/timeline" {
+				if timelineCalls.Add(1) == 1 {
+					return nil, fmt.Errorf("API rate limit exceeded (HTTP 403)")
+				}
+				return json.Marshal(events80)
+			}
+			if strings.HasSuffix(a, "/issues/80/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/80/comments" {
+				return json.Marshal([]ghComment{})
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
+	}
+	if items[0].Title != "Some issue" {
+		t.Errorf("expected 'Some issue', got %q", items[0].Title)
+	}
+	if got := timelineCalls.Load(); got != 2 {
+		t.Errorf("expected 2 timeline calls (1 failed + 1 retry), got %d", got)
 	}
 }

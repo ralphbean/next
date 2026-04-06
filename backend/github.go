@@ -3,7 +3,9 @@ package backend
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rbean/next-up/format"
@@ -65,8 +67,61 @@ func NewGitHub(run CmdRunner) Backend {
 	return &gitHub{run: run}
 }
 
+const maxRetries = 3
+
+// runAPI wraps g.run with rate-limit retry. When gh api returns a rate
+// limit error, it queries the rate_limit endpoint for the reset time
+// and waits, falling back to exponential backoff if that fails.
+func (g *gitHub) runAPI(name string, args ...string) ([]byte, error) {
+	backoff := 5 * time.Second
+	for attempt := 0; ; attempt++ {
+		out, err := g.run(name, args...)
+		if err == nil {
+			return out, nil
+		}
+		if !isRateLimitError(err) || attempt >= maxRetries {
+			return out, err
+		}
+		wait := g.rateLimitWait()
+		if wait <= 0 {
+			wait = backoff
+			backoff *= 2
+		}
+		fmt.Fprintf(os.Stderr, "Rate limited by GitHub API, waiting %s before retrying...\n", wait.Truncate(time.Second))
+		time.Sleep(wait)
+	}
+}
+
+func isRateLimitError(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "rate limit")
+}
+
+// rateLimitWait queries the GitHub rate_limit endpoint and returns how
+// long to wait until the core rate limit resets. Returns 0 on any error.
+func (g *gitHub) rateLimitWait() time.Duration {
+	out, err := g.run("gh", "api", "rate_limit")
+	if err != nil {
+		return 0
+	}
+	var rl struct {
+		Rate struct {
+			Remaining int   `json:"remaining"`
+			Reset     int64 `json:"reset"`
+		} `json:"rate"`
+	}
+	if err := json.Unmarshal(out, &rl); err != nil {
+		return 0
+	}
+	resetTime := time.Unix(rl.Rate.Reset, 0)
+	wait := time.Until(resetTime) + 2*time.Second // small buffer
+	if wait < 0 {
+		return 0
+	}
+	return wait
+}
+
 func (g *gitHub) CurrentUser() (string, error) {
-	out, err := g.run("gh", "api", "user")
+	out, err := g.runAPI("gh", "api", "user")
 	if err != nil {
 		return "", fmt.Errorf("failed to get current GitHub user: %w", err)
 	}
@@ -80,7 +135,7 @@ func (g *gitHub) CurrentUser() (string, error) {
 func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int) ([]format.Item, error) {
 	// Fetch first page of issues (includes PRs) sorted by updated
 	endpoint := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
-	out, err := g.run("gh", "api", endpoint,
+	out, err := g.runAPI("gh", "api", endpoint,
 		"--method", "GET",
 		"-f", "state=open",
 		"-f", "sort=updated",
@@ -279,7 +334,7 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 
 func (g *gitHub) getTimeline(owner, repo string, number int) ([]ghTimelineEvent, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/timeline", owner, repo, number)
-	out, err := g.run("gh", "api", endpoint, "--paginate")
+	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get timeline for #%d: %w", number, err)
 	}
@@ -292,7 +347,7 @@ func (g *gitHub) getTimeline(owner, repo string, number int) ([]ghTimelineEvent,
 
 func (g *gitHub) getReactions(owner, repo string, number int) ([]ghReaction, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/reactions", owner, repo, number)
-	out, err := g.run("gh", "api", endpoint, "--paginate")
+	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get reactions for #%d: %w", number, err)
 	}
@@ -314,7 +369,7 @@ func (g *gitHub) getCommentReactions(owner, repo string, number int) ([]ghReacti
 			continue
 		}
 		endpoint := fmt.Sprintf("repos/%s/%s/issues/comments/%d/reactions", owner, repo, c.ID)
-		out, err := g.run("gh", "api", endpoint, "--paginate")
+		out, err := g.runAPI("gh", "api", endpoint, "--paginate")
 		if err != nil {
 			return nil, fmt.Errorf("failed to get reactions for comment %d: %w", c.ID, err)
 		}
@@ -329,7 +384,7 @@ func (g *gitHub) getCommentReactions(owner, repo string, number int) ([]ghReacti
 
 func (g *gitHub) getReviewCommentReactions(owner, repo string, number int) ([]ghReaction, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/comments", owner, repo, number)
-	out, err := g.run("gh", "api", endpoint, "--paginate")
+	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get review comments for #%d: %w", number, err)
 	}
@@ -343,7 +398,7 @@ func (g *gitHub) getReviewCommentReactions(owner, repo string, number int) ([]gh
 			continue
 		}
 		ep := fmt.Sprintf("repos/%s/%s/pulls/comments/%d/reactions", owner, repo, c.ID)
-		out, err := g.run("gh", "api", ep, "--paginate")
+		out, err := g.runAPI("gh", "api", ep, "--paginate")
 		if err != nil {
 			return nil, fmt.Errorf("failed to get reactions for review comment %d: %w", c.ID, err)
 		}
@@ -358,7 +413,7 @@ func (g *gitHub) getReviewCommentReactions(owner, repo string, number int) ([]gh
 
 func (g *gitHub) getComments(owner, repo string, number int) ([]ghComment, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number)
-	out, err := g.run("gh", "api", endpoint, "--paginate")
+	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get comments for #%d: %w", number, err)
 	}
@@ -371,7 +426,7 @@ func (g *gitHub) getComments(owner, repo string, number int) ([]ghComment, error
 
 func (g *gitHub) getReviews(owner, repo string, number int) ([]ghReview, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number)
-	out, err := g.run("gh", "api", endpoint, "--paginate")
+	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get reviews for #%d: %w", number, err)
 	}
