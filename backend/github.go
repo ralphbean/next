@@ -38,6 +38,22 @@ type ghReview struct {
 	Body        string    `json:"body"`
 }
 
+type ghReaction struct {
+	User      ghActor   `json:"user"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type ghComment struct {
+	ID        int       `json:"id"`
+	User      ghActor   `json:"user"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+	Reactions struct {
+		TotalCount int `json:"total_count"`
+	} `json:"reactions"`
+}
+
 type ghUser struct {
 	Login string `json:"login"`
 }
@@ -62,7 +78,7 @@ func (g *gitHub) CurrentUser() (string, error) {
 	return u.Login, nil
 }
 
-func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignoreEvents map[string]bool, ignoreUsers map[string]bool, limit int) ([]format.Item, error) {
+func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int) ([]format.Item, error) {
 	// Fetch first page of issues (includes PRs) sorted by updated
 	endpoint := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
 	out, err := g.run("gh", "api", endpoint,
@@ -90,9 +106,11 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 
 	// Prefetch timeline and reviews in parallel for all issues
 	type prefetch struct {
-		events  []ghTimelineEvent
-		reviews []ghReview
-		err     error
+		events           []ghTimelineEvent
+		reviews          []ghReview
+		reactions        []ghReaction
+		commentReactions []ghReaction
+		err              error
 	}
 	fetched := make([]prefetch, len(issues))
 	var wg sync.WaitGroup
@@ -109,6 +127,18 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 				return
 			}
 			fetched[i].events = events
+			reactions, err := g.getReactions(owner, repo, issue.Number)
+			if err != nil {
+				fetched[i].err = err
+				return
+			}
+			fetched[i].reactions = reactions
+			commentReactions, err := g.getCommentReactions(owner, repo, issue.Number)
+			if err != nil {
+				fetched[i].err = err
+				return
+			}
+			fetched[i].commentReactions = commentReactions
 			if issue.PullRequest != nil {
 				reviews, err := g.getReviews(owner, repo, issue.Number)
 				if err != nil {
@@ -128,14 +158,15 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		}
 		events := fetched[i].events
 		reviews := fetched[i].reviews
+		reactions := append(fetched[i].reactions, fetched[i].commentReactions...)
 
 		// Check if user interacted within the since window
 		userTouched := false
 		for _, ev := range events {
-			if ignoreUsers[ev.Actor.Login] {
+			if ignoreUsers.Match(ev.Actor.Login) {
 				continue
 			}
-			if ignoreEvents[ev.Event] {
+			if ignoreEvents.Match(ev.Event) {
 				continue
 			}
 			if ev.Actor.Login != "" && ev.Actor.Login == user && ev.CreatedAt.After(cutoff) {
@@ -145,10 +176,18 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		}
 		if !userTouched {
 			for _, r := range reviews {
-				if ignoreUsers[r.User.Login] {
+				if ignoreUsers.Match(r.User.Login) {
 					continue
 				}
 				if r.User.Login == user && r.SubmittedAt.After(cutoff) {
+					userTouched = true
+					break
+				}
+			}
+		}
+		if !userTouched {
+			for _, r := range reactions {
+				if r.User.Login == user && r.CreatedAt.After(cutoff) {
 					userTouched = true
 					break
 				}
@@ -161,10 +200,10 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		// Build the item with events since user's last interaction
 		var lastUserTime time.Time
 		for _, ev := range events {
-			if ignoreUsers[ev.Actor.Login] {
+			if ignoreUsers.Match(ev.Actor.Login) {
 				continue
 			}
-			if ignoreEvents[ev.Event] {
+			if ignoreEvents.Match(ev.Event) {
 				continue
 			}
 			if ev.Actor.Login == user && ev.CreatedAt.After(lastUserTime) {
@@ -172,25 +211,30 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			}
 		}
 		for _, r := range reviews {
-			if ignoreUsers[r.User.Login] {
+			if ignoreUsers.Match(r.User.Login) {
 				continue
 			}
 			if r.User.Login == user && r.SubmittedAt.After(lastUserTime) {
 				lastUserTime = r.SubmittedAt
 			}
 		}
+		for _, r := range reactions {
+			if r.User.Login == user && r.CreatedAt.After(lastUserTime) {
+				lastUserTime = r.CreatedAt
+			}
+		}
 
 		// Check if any non-user, non-ignored actor has any activity at all
 		othersHaveActivity := false
 		for _, ev := range events {
-			if ev.Actor.Login != "" && ev.Actor.Login != user && !ignoreUsers[ev.Actor.Login] {
+			if ev.Actor.Login != "" && ev.Actor.Login != user && !ignoreUsers.Match(ev.Actor.Login) {
 				othersHaveActivity = true
 				break
 			}
 		}
 		if !othersHaveActivity {
 			for _, r := range reviews {
-				if r.User.Login != user && !ignoreUsers[r.User.Login] {
+				if r.User.Login != user && !ignoreUsers.Match(r.User.Login) {
 					othersHaveActivity = true
 					break
 				}
@@ -202,10 +246,10 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			if ev.Actor.Login == "" || ev.CreatedAt.IsZero() {
 				continue
 			}
-			if ignoreEvents[ev.Event] {
+			if ignoreEvents.Match(ev.Event) {
 				continue
 			}
-			if ev.Actor.Login == user || ignoreUsers[ev.Actor.Login] {
+			if ev.Actor.Login == user || ignoreUsers.Match(ev.Actor.Login) {
 				continue
 			}
 			if !lastUserTime.IsZero() && ev.CreatedAt.Before(lastUserTime) {
@@ -219,7 +263,7 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			})
 		}
 		for _, r := range reviews {
-			if r.User.Login == user || ignoreUsers[r.User.Login] {
+			if r.User.Login == user || ignoreUsers.Match(r.User.Login) {
 				continue
 			}
 			if !lastUserTime.IsZero() && r.SubmittedAt.Before(lastUserTime) {
@@ -237,7 +281,7 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			// If others have activity that got filtered out, skip this item.
 			// If no one else has touched it and it was filed by someone else,
 			// include a synthetic "opened" event so it still surfaces.
-			if othersHaveActivity || issue.User.Login == user || ignoreUsers[issue.User.Login] {
+			if othersHaveActivity || issue.User.Login == user || ignoreUsers.Match(issue.User.Login) {
 				continue
 			}
 			fmtEvents = append(fmtEvents, format.Event{
@@ -271,6 +315,56 @@ func (g *gitHub) getTimeline(owner, repo string, number int) ([]ghTimelineEvent,
 		return nil, fmt.Errorf("failed to parse timeline: %w", err)
 	}
 	return events, nil
+}
+
+func (g *gitHub) getReactions(owner, repo string, number int) ([]ghReaction, error) {
+	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/reactions", owner, repo, number)
+	out, err := g.run("gh", "api", endpoint, "--paginate")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reactions for #%d: %w", number, err)
+	}
+	var reactions []ghReaction
+	if err := json.Unmarshal(out, &reactions); err != nil {
+		return nil, fmt.Errorf("failed to parse reactions: %w", err)
+	}
+	return reactions, nil
+}
+
+func (g *gitHub) getCommentReactions(owner, repo string, number int) ([]ghReaction, error) {
+	comments, err := g.getComments(owner, repo, number)
+	if err != nil {
+		return nil, err
+	}
+	var all []ghReaction
+	for _, c := range comments {
+		if c.Reactions.TotalCount == 0 {
+			continue
+		}
+		endpoint := fmt.Sprintf("repos/%s/%s/issues/comments/%d/reactions", owner, repo, c.ID)
+		out, err := g.run("gh", "api", endpoint, "--paginate")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get reactions for comment %d: %w", c.ID, err)
+		}
+		var reactions []ghReaction
+		if err := json.Unmarshal(out, &reactions); err != nil {
+			return nil, fmt.Errorf("failed to parse comment reactions: %w", err)
+		}
+		all = append(all, reactions...)
+	}
+	return all, nil
+}
+
+func (g *gitHub) getComments(owner, repo string, number int) ([]ghComment, error) {
+	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number)
+	out, err := g.run("gh", "api", endpoint, "--paginate")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get comments for #%d: %w", number, err)
+	}
+	var comments []ghComment
+	if err := json.Unmarshal(out, &comments); err != nil {
+		return nil, fmt.Errorf("failed to parse comments: %w", err)
+	}
+	return comments, nil
 }
 
 func (g *gitHub) getReviews(owner, repo string, number int) ([]ghReview, error) {
