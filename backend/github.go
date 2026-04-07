@@ -258,10 +258,10 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			}
 		}
 
-		// Check if any non-user, non-ignored actor has any activity at all
+		// Check if any non-user, non-ignored actor has any non-ignored activity
 		othersHaveActivity := false
 		for _, ev := range events {
-			if ev.Actor.Login != "" && ev.Actor.Login != user && !ignoreUsers.Match(ev.Actor.Login) {
+			if ev.Actor.Login != "" && ev.Actor.Login != user && !ignoreUsers.Match(ev.Actor.Login) && !ignoreEvents.Match(ev.Event) {
 				othersHaveActivity = true
 				break
 			}

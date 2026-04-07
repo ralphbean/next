@@ -109,12 +109,14 @@ func TestGitHubNextItemsIgnoreEvents(t *testing.T) {
 			Title:     "Issue with only mentioned events",
 			HTMLURL:   "https://github.com/o/r/issues/1",
 			UpdatedAt: now.Add(-10 * time.Minute),
+			User:      ghActor{Login: "me"},
 		},
 		{
 			Number:    2,
 			Title:     "Issue with a real comment",
 			HTMLURL:   "https://github.com/o/r/issues/2",
 			UpdatedAt: now.Add(-20 * time.Minute),
+			User:      ghActor{Login: "other"},
 		},
 	}
 
