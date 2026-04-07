@@ -230,6 +230,19 @@ func TestGitHubNextItemsReviewCountsAsTouch(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
+			if a == "graphql" {
+				return json.Marshal(map[string]interface{}{
+					"data": map[string]interface{}{
+						"repository": map[string]interface{}{
+							"pullRequest": map[string]interface{}{
+								"reviews": map[string]interface{}{
+									"nodes": []interface{}{},
+								},
+							},
+						},
+					},
+				})
+			}
 			if strings.HasSuffix(a, "/reactions") {
 				return json.Marshal([]ghReaction{})
 			}
@@ -548,10 +561,24 @@ func TestGitHubNextItemsApprovalSummary(t *testing.T) {
 		},
 	}
 
+	emptyGraphQL := map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"pullRequest": map[string]interface{}{
+					"reviews": map[string]interface{}{
+						"nodes": []interface{}{},
+					},
+				},
+			},
+		},
+	}
 	runner := func(name string, args ...string) ([]byte, error) {
 		for i, a := range args {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
+			}
+			if a == "graphql" {
+				return json.Marshal(emptyGraphQL)
 			}
 			if strings.HasSuffix(a, "/reactions") {
 				return json.Marshal([]ghReaction{})
@@ -831,6 +858,19 @@ func TestGitHubReviewCommentReactionMarksTouched(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
+			if a == "graphql" {
+				return json.Marshal(map[string]interface{}{
+					"data": map[string]interface{}{
+						"repository": map[string]interface{}{
+							"pullRequest": map[string]interface{}{
+								"reviews": map[string]interface{}{
+									"nodes": []interface{}{},
+								},
+							},
+						},
+					},
+				})
+			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/70/timeline" {
 				return json.Marshal(events70)
 			}
@@ -946,5 +986,119 @@ func TestGitHubRetryOnRateLimit(t *testing.T) {
 	}
 	if got := timelineCalls.Load(); got != 2 {
 		t.Errorf("expected 2 timeline calls (1 failed + 1 retry), got %d", got)
+	}
+}
+
+func TestGitHubReviewReactionCountsAsTouch(t *testing.T) {
+	now := time.Now()
+	pr := json.RawMessage(`{}`)
+
+	issues := []ghIssue{
+		{
+			Number:      90,
+			Title:       "PR where I reacted to a review",
+			HTMLURL:     "https://github.com/o/r/pull/90",
+			CreatedAt:   now.Add(-2 * time.Hour),
+			UpdatedAt:   now.Add(-5 * time.Minute),
+			User:        ghActor{Login: "other"},
+			PullRequest: &pr,
+		},
+		{
+			Number:    91,
+			Title:     "Issue I have not touched",
+			HTMLURL:   "https://github.com/o/r/issues/91",
+			CreatedAt: now.Add(-3 * time.Hour),
+			UpdatedAt: now.Add(-10 * time.Minute),
+			User:      ghActor{Login: "other"},
+		},
+	}
+
+	events90 := []ghTimelineEvent{
+		{
+			Event:     "review_requested",
+			CreatedAt: now.Add(-1 * time.Hour),
+			Actor:     ghActor{Login: "other"},
+		},
+	}
+	reviews90 := []ghReview{
+		{
+			User:        ghActor{Login: "reviewer"},
+			State:       "COMMENTED",
+			SubmittedAt: now.Add(-30 * time.Minute),
+			Body:        "looks good but needs a tweak",
+		},
+	}
+	events91 := []ghTimelineEvent{
+		{
+			Event:     "commented",
+			CreatedAt: now.Add(-20 * time.Minute),
+			Actor:     ghActor{Login: "other"},
+			Body:      "needs attention",
+		},
+	}
+
+	// GraphQL response: I reacted to the review with thumbs up 10 min ago
+	graphQLResp := map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"pullRequest": map[string]interface{}{
+					"reviews": map[string]interface{}{
+						"nodes": []interface{}{
+							map[string]interface{}{
+								"reactions": map[string]interface{}{
+									"nodes": []interface{}{
+										map[string]interface{}{
+											"user":      map[string]interface{}{"login": "me"},
+											"content":   "THUMBS_UP",
+											"createdAt": now.Add(-10 * time.Minute).Format(time.RFC3339),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if a == "graphql" {
+				return json.Marshal(graphQLResp)
+			}
+			if strings.HasSuffix(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.HasSuffix(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/90/timeline" {
+				return json.Marshal(events90)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/pulls/90/reviews" {
+				return json.Marshal(reviews90)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/91/timeline" {
+				return json.Marshal(events91)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	// PR 90 should be skipped (I reacted to a review within 30m), should get issue 91
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
+	}
+	if items[0].Title != "Issue I have not touched" {
+		t.Errorf("expected issue 91, got %q", items[0].Title)
 	}
 }

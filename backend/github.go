@@ -184,6 +184,12 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			if err != nil {
 				return nil, err
 			}
+			var reviewReactions []ghReaction
+			reviewReactions, err = g.getReviewReactions(owner, repo, issue.Number)
+			if err != nil {
+				return nil, err
+			}
+			reviewCommentReactions = append(reviewCommentReactions, reviewReactions...)
 		}
 		reactions := append(issueReactions, commentReactions...)
 		reactions = append(reactions, reviewCommentReactions...)
@@ -422,6 +428,63 @@ func (g *gitHub) getComments(owner, repo string, number int) ([]ghComment, error
 		return nil, fmt.Errorf("failed to parse comments: %w", err)
 	}
 	return comments, nil
+}
+
+func (g *gitHub) getReviewReactions(owner, repo string, number int) ([]ghReaction, error) {
+	query := fmt.Sprintf(`{
+		repository(owner: %q, name: %q) {
+			pullRequest(number: %d) {
+				reviews(first: 100) {
+					nodes {
+						reactions(first: 100) {
+							nodes {
+								user { login }
+								content
+								createdAt
+							}
+						}
+					}
+				}
+			}
+		}
+	}`, owner, repo, number)
+	out, err := g.runAPI("gh", "api", "graphql", "-f", "query="+query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get review reactions for #%d: %w", number, err)
+	}
+	var resp struct {
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					Reviews struct {
+						Nodes []struct {
+							Reactions struct {
+								Nodes []struct {
+									User      ghActor   `json:"user"`
+									Content   string    `json:"content"`
+									CreatedAt time.Time `json:"createdAt"`
+								} `json:"nodes"`
+							} `json:"reactions"`
+						} `json:"nodes"`
+					} `json:"reviews"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse review reactions: %w", err)
+	}
+	var all []ghReaction
+	for _, review := range resp.Data.Repository.PullRequest.Reviews.Nodes {
+		for _, r := range review.Reactions.Nodes {
+			all = append(all, ghReaction{
+				User:      r.User,
+				Content:   r.Content,
+				CreatedAt: r.CreatedAt,
+			})
+		}
+	}
+	return all, nil
 }
 
 func (g *gitHub) getReviews(owner, repo string, number int) ([]ghReview, error) {
