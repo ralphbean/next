@@ -143,14 +143,15 @@ func (g *gitHub) CurrentUser() (string, error) {
 }
 
 func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, emit func(format.Item)) error {
-	// Fetch first page of issues (includes PRs) sorted by updated
+	// Fetch all open issues (includes PRs) sorted by updated
 	endpoint := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
 	out, err := g.runAPI("gh", "api", endpoint,
+		"--paginate",
 		"--method", "GET",
 		"-f", "state=open",
 		"-f", "sort=updated",
 		"-f", "direction=desc",
-		"-f", "per_page=30",
+		"-f", "per_page=100",
 	)
 	if err != nil {
 		return fmt.Errorf("failed to list issues: %w", err)

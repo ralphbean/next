@@ -142,32 +142,12 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 
 	cutoff := time.Now().Add(-since)
 
-	// Prefetch notes in parallel for all items
-	type prefetch struct {
-		notes []glNote
-		err   error
-	}
-	fetched := make([]prefetch, len(items))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 5)
-	for i, item := range items {
-		wg.Add(1)
-		go func(i int, item glItem) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			notes, err := g.getNotes(projectPath, item.Kind, item.IID)
-			fetched[i] = prefetch{notes: notes, err: err}
-		}(i, item)
-	}
-	wg.Wait()
-
 	found := 0
-	for i, item := range items {
-		if fetched[i].err != nil {
-			return fetched[i].err
+	for _, item := range items {
+		notes, err := g.getNotes(projectPath, item.Kind, item.IID)
+		if err != nil {
+			return err
 		}
-		notes := fetched[i].notes
 
 		kind := "issue"
 		label := fmt.Sprintf("#%d", item.IID)
@@ -279,26 +259,26 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 }
 
 func (g *gitLab) listIssues(projectPath string) ([]glIssue, error) {
-	endpoint := fmt.Sprintf("projects/%s/issues?state=opened&order_by=updated_at&sort=desc&per_page=30", projectPath)
-	out, err := g.run(g.cmd(), "api", endpoint)
+	endpoint := fmt.Sprintf("projects/%s/issues?state=opened&order_by=updated_at&sort=desc&per_page=100", projectPath)
+	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list GitLab issues: %w", err)
 	}
 	var issues []glIssue
-	if err := json.Unmarshal(out, &issues); err != nil {
+	if err := json.Unmarshal(fixPaginatedJSON(out), &issues); err != nil {
 		return nil, fmt.Errorf("failed to parse GitLab issues: %w", err)
 	}
 	return issues, nil
 }
 
 func (g *gitLab) listMRs(projectPath string) ([]glMR, error) {
-	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=opened&order_by=updated_at&sort=desc&per_page=30", projectPath)
-	out, err := g.run(g.cmd(), "api", endpoint)
+	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=opened&order_by=updated_at&sort=desc&per_page=100", projectPath)
+	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list GitLab MRs: %w", err)
 	}
 	var mrs []glMR
-	if err := json.Unmarshal(out, &mrs); err != nil {
+	if err := json.Unmarshal(fixPaginatedJSON(out), &mrs); err != nil {
 		return nil, fmt.Errorf("failed to parse GitLab MRs: %w", err)
 	}
 	return mrs, nil
