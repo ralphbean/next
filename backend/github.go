@@ -29,7 +29,17 @@ type ghTimelineEvent struct {
 	Event     string    `json:"event"`
 	CreatedAt time.Time `json:"created_at"`
 	Actor     ghActor   `json:"actor"`
+	User      ghActor   `json:"user"`
 	Body      string    `json:"body"`
+}
+
+// login returns the effective actor login for a timeline event.
+// "commented" events use the "user" field instead of "actor".
+func (e ghTimelineEvent) login() string {
+	if e.Actor.Login != "" {
+		return e.Actor.Login
+	}
+	return e.User.Login
 }
 
 type ghReview struct {
@@ -197,13 +207,13 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		// Check if user interacted within the since window
 		userTouched := false
 		for _, ev := range events {
-			if ignoreUsers.Match(ev.Actor.Login) {
+			if ignoreUsers.Match(ev.login()) {
 				continue
 			}
 			if ignoreEvents.Match(ev.Event) {
 				continue
 			}
-			if ev.Actor.Login != "" && ev.Actor.Login == user && ev.CreatedAt.After(cutoff) {
+			if ev.login() != "" && ev.login() == user && ev.CreatedAt.After(cutoff) {
 				userTouched = true
 				break
 			}
@@ -234,13 +244,13 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		// Build the item with events since user's last interaction
 		var lastUserTime time.Time
 		for _, ev := range events {
-			if ignoreUsers.Match(ev.Actor.Login) {
+			if ignoreUsers.Match(ev.login()) {
 				continue
 			}
 			if ignoreEvents.Match(ev.Event) {
 				continue
 			}
-			if ev.Actor.Login == user && ev.CreatedAt.After(lastUserTime) {
+			if ev.login() == user && ev.CreatedAt.After(lastUserTime) {
 				lastUserTime = ev.CreatedAt
 			}
 		}
@@ -258,32 +268,36 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			}
 		}
 
-		// Check if any non-user, non-ignored actor has any non-ignored activity
+		// Check if any non-user, non-ignored actor has activity after the user's last interaction
 		othersHaveActivity := false
 		for _, ev := range events {
-			if ev.Actor.Login != "" && ev.Actor.Login != user && !ignoreUsers.Match(ev.Actor.Login) && !ignoreEvents.Match(ev.Event) {
-				othersHaveActivity = true
-				break
+			if ev.login() != "" && ev.login() != user && !ignoreUsers.Match(ev.login()) && !ignoreEvents.Match(ev.Event) {
+				if lastUserTime.IsZero() || ev.CreatedAt.After(lastUserTime) {
+					othersHaveActivity = true
+					break
+				}
 			}
 		}
 		if !othersHaveActivity {
 			for _, r := range reviews {
 				if r.User.Login != user && !ignoreUsers.Match(r.User.Login) {
-					othersHaveActivity = true
-					break
+					if lastUserTime.IsZero() || r.SubmittedAt.After(lastUserTime) {
+						othersHaveActivity = true
+						break
+					}
 				}
 			}
 		}
 
 		var fmtEvents []format.Event
 		for _, ev := range events {
-			if ev.Actor.Login == "" || ev.CreatedAt.IsZero() {
+			if ev.login() == "" || ev.CreatedAt.IsZero() {
 				continue
 			}
 			if ignoreEvents.Match(ev.Event) {
 				continue
 			}
-			if ev.Actor.Login == user || ignoreUsers.Match(ev.Actor.Login) {
+			if ev.login() == user || ignoreUsers.Match(ev.login()) {
 				continue
 			}
 			if !lastUserTime.IsZero() && ev.CreatedAt.Before(lastUserTime) {
@@ -292,7 +306,7 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			summary := eventSummary(ev.Event, ev.Body)
 			fmtEvents = append(fmtEvents, format.Event{
 				Timestamp: ev.CreatedAt,
-				Author:    ev.Actor.Login,
+				Author:    ev.login(),
 				Summary:   summary,
 			})
 		}
@@ -312,10 +326,11 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		}
 
 		if len(fmtEvents) == 0 {
-			// If others have activity that got filtered out, skip this item.
-			// If no one else has touched it and it was filed by someone else,
-			// include a synthetic "opened" event so it still surfaces.
-			if othersHaveActivity || issue.User.Login == user || ignoreUsers.Match(issue.User.Login) {
+			// If the user has already interacted and there's no new activity
+			// from others, skip — there's nothing new for the user to act on.
+			// If no one else has touched it, the user hasn't interacted, and
+			// it was filed by someone else, include a synthetic "opened" event.
+			if othersHaveActivity || !lastUserTime.IsZero() || issue.User.Login == user || ignoreUsers.Match(issue.User.Login) {
 				continue
 			}
 			fmtEvents = append(fmtEvents, format.Event{

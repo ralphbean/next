@@ -204,8 +204,10 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 				continue
 			}
 			if !n.System || isApprovalNote(n.Body) {
-				othersHaveActivity = true
-				break
+				if lastUserTime.IsZero() || n.CreatedAt.After(lastUserTime) {
+					othersHaveActivity = true
+					break
+				}
 			}
 		}
 
@@ -238,7 +240,7 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 		}
 
 		if len(fmtEvents) == 0 {
-			if othersHaveActivity || item.Author == user || ignoreUsers.Match(item.Author) {
+			if othersHaveActivity || !lastUserTime.IsZero() || item.Author == user || ignoreUsers.Match(item.Author) {
 				continue
 			}
 			fmtEvents = append(fmtEvents, format.Event{

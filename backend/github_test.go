@@ -1104,3 +1104,55 @@ func TestGitHubReviewReactionCountsAsTouch(t *testing.T) {
 		t.Errorf("expected issue 91, got %q", items[0].Title)
 	}
 }
+
+// TestGitHubCommentUserField verifies that "commented" timeline events
+// are correctly detected even when the actor is in the "user" JSON field
+// (which is how GitHub's Timeline API actually returns them) rather than
+// the "actor" field.
+func TestGitHubCommentUserField(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    324,
+			Title:     "Issue I commented on recently",
+			HTMLURL:   "https://github.com/o/r/issues/324",
+			UpdatedAt: now.Add(-10 * time.Minute),
+			User:      ghActor{Login: "someone"},
+		},
+	}
+
+	// "commented" events from the timeline API use "user", not "actor"
+	events324 := []ghTimelineEvent{
+		{
+			Event:     "commented",
+			CreatedAt: now.Add(-10 * time.Minute),
+			User:      ghActor{Login: "me"},
+			Body:      "I just commented on this",
+		},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if a == "repos/o/r/issues/324/timeline" {
+				return json.Marshal(events324)
+			}
+			if strings.HasSuffix(a, "/reactions") || strings.HasSuffix(a, "/comments") {
+				return []byte("[]"), nil
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	items, err := gh.NextItems("o", "r", "me", 1*time.Hour, nil, nil, 5)
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("NextItems() returned %d items, want 0 (issue should be filtered because user commented recently)", len(items))
+	}
+}
