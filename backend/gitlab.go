@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -94,7 +95,7 @@ func (g *gitLab) CurrentUser() (string, error) {
 	return u.Username, nil
 }
 
-func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int) ([]format.Item, error) {
+func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, emit func(format.Item)) error {
 	projectPath := url.PathEscape(owner + "/" + repo)
 
 	// Fetch issues and MRs in parallel
@@ -113,10 +114,10 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 	}()
 	listWg.Wait()
 	if issErr != nil {
-		return nil, issErr
+		return issErr
 	}
 	if mrErr != nil {
-		return nil, mrErr
+		return mrErr
 	}
 
 	// Merge into unified list sorted by updated_at descending
@@ -161,12 +162,23 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 	}
 	wg.Wait()
 
-	var result []format.Item
+	found := 0
 	for i, item := range items {
 		if fetched[i].err != nil {
-			return nil, fetched[i].err
+			return fetched[i].err
 		}
 		notes := fetched[i].notes
+
+		kind := "issue"
+		label := fmt.Sprintf("#%d", item.IID)
+		if item.Kind == "merge_requests" {
+			kind = "MR"
+			label = fmt.Sprintf("!%d", item.IID)
+		}
+		title := item.Title
+		if r := []rune(title); len(r) > 50 {
+			title = string(r[:50]) + "..."
+		}
 
 		userTouched := false
 		for _, n := range notes {
@@ -182,6 +194,7 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 			}
 		}
 		if userTouched {
+			fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (cooldown)\033[0m\n", kind, label, title)
 			continue
 		}
 
@@ -241,6 +254,7 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 
 		if len(fmtEvents) == 0 {
 			if othersHaveActivity || !lastUserTime.IsZero() || item.Author == user || ignoreUsers.Match(item.Author) {
+				fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (no new activity)\033[0m\n", kind, label, title)
 				continue
 			}
 			fmtEvents = append(fmtEvents, format.Event{
@@ -250,17 +264,18 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 			})
 		}
 
-		result = append(result, format.Item{
+		emit(format.Item{
 			URL:    item.WebURL,
 			Title:  item.Title,
 			Events: fmtEvents,
 		})
-		if len(result) >= limit {
+		found++
+		if found >= limit {
 			break
 		}
 	}
 
-	return result, nil
+	return nil
 }
 
 func (g *gitLab) listIssues(projectPath string) ([]glIssue, error) {

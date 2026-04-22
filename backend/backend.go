@@ -47,5 +47,5 @@ func matchGlob(pattern, s string) bool {
 // Backend fetches issues/PRs from a hosting platform.
 type Backend interface {
 	CurrentUser() (string, error)
-	NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int) ([]format.Item, error)
+	NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, emit func(format.Item)) error
 }

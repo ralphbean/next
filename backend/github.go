@@ -97,7 +97,7 @@ func (g *gitHub) runAPI(name string, args ...string) ([]byte, error) {
 			wait = backoff
 			backoff *= 2
 		}
-		fmt.Fprintf(os.Stderr, "Rate limited by GitHub API, waiting %s before retrying...\n", wait.Truncate(time.Second))
+		fmt.Fprintf(os.Stderr, "\033[2mRate limited by GitHub API, waiting %s before retrying...\033[0m\n", wait.Truncate(time.Second))
 		time.Sleep(wait)
 	}
 }
@@ -142,7 +142,7 @@ func (g *gitHub) CurrentUser() (string, error) {
 	return u.Login, nil
 }
 
-func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int) ([]format.Item, error) {
+func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, emit func(format.Item)) error {
 	// Fetch first page of issues (includes PRs) sorted by updated
 	endpoint := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
 	out, err := g.runAPI("gh", "api", endpoint,
@@ -153,12 +153,12 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		"-f", "per_page=30",
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list issues: %w", err)
+		return fmt.Errorf("failed to list issues: %w", err)
 	}
 
 	var issues []ghIssue
 	if err := json.Unmarshal(out, &issues); err != nil {
-		return nil, fmt.Errorf("failed to parse issues: %w", err)
+		return fmt.Errorf("failed to parse issues: %w", err)
 	}
 
 	// Sort by updated descending (most recent first)
@@ -168,36 +168,46 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 
 	cutoff := time.Now().Add(-since)
 
-	var result []format.Item
+	found := 0
 	for _, issue := range issues {
+		kind := "issue"
+		if issue.PullRequest != nil {
+			kind = "PR"
+		}
+		label := fmt.Sprintf("#%d", issue.Number)
+		title := issue.Title
+		if r := []rune(title); len(r) > 50 {
+			title = string(r[:50]) + "..."
+		}
+
 		// Fetch details lazily per issue to avoid rate limiting
 		events, err := g.getTimeline(owner, repo, issue.Number)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		issueReactions, err := g.getReactions(owner, repo, issue.Number)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		commentReactions, err := g.getCommentReactions(owner, repo, issue.Number)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		var reviews []ghReview
 		var reviewCommentReactions []ghReaction
 		if issue.PullRequest != nil {
 			reviews, err = g.getReviews(owner, repo, issue.Number)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			reviewCommentReactions, err = g.getReviewCommentReactions(owner, repo, issue.Number)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			var reviewReactions []ghReaction
 			reviewReactions, err = g.getReviewReactions(owner, repo, issue.Number)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			reviewCommentReactions = append(reviewCommentReactions, reviewReactions...)
 		}
@@ -238,6 +248,7 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			}
 		}
 		if userTouched {
+			fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (cooldown)\033[0m\n", kind, label, title)
 			continue
 		}
 
@@ -331,6 +342,7 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			// If no one else has touched it, the user hasn't interacted, and
 			// it was filed by someone else, include a synthetic "opened" event.
 			if othersHaveActivity || !lastUserTime.IsZero() || issue.User.Login == user || ignoreUsers.Match(issue.User.Login) {
+				fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (no new activity)\033[0m\n", kind, label, title)
 				continue
 			}
 			fmtEvents = append(fmtEvents, format.Event{
@@ -340,17 +352,18 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			})
 		}
 
-		result = append(result, format.Item{
+		emit(format.Item{
 			URL:    issue.HTMLURL,
 			Title:  issue.Title,
 			Events: fmtEvents,
 		})
-		if len(result) >= limit {
+		found++
+		if found >= limit {
 			break
 		}
 	}
 
-	return result, nil
+	return nil
 }
 
 func (g *gitHub) getTimeline(owner, repo string, number int) ([]ghTimelineEvent, error) {

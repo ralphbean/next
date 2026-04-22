@@ -7,7 +7,21 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/rbean/next-up/format"
 )
+
+func ghCollect(t *testing.T, gh Backend, owner, repo, user string, since time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
+	t.Helper()
+	var items []format.Item
+	err := gh.NextItems(owner, repo, user, since, ignoreEvents, ignoreUsers, limit, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	return items
+}
 
 func TestGitHubCurrentUser(t *testing.T) {
 	runner := func(name string, args ...string) ([]byte, error) {
@@ -85,10 +99,7 @@ func TestGitHubNextItems(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
@@ -165,10 +176,7 @@ func TestGitHubNextItemsIgnoreEvents(t *testing.T) {
 
 	ignore := MatchSet{"mentioned", "subscribed"}
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, ignore, nil, 1)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, ignore, nil, 1)
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
@@ -265,10 +273,7 @@ func TestGitHubNextItemsReviewCountsAsTouch(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
@@ -309,10 +314,7 @@ func TestGitHubNextItemsAllTouchedByMe(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if len(items) != 0 {
 		t.Errorf("expected empty slice (nothing to do), got %+v", items)
 	}
@@ -375,20 +377,14 @@ func TestGitHubNextItemsIgnoreUsers(t *testing.T) {
 	// Without ignoring the bot, the bot's comment is the only event after "me",
 	// but since we ignore the bot user, there are no new events → empty result
 	ignoreUsers := MatchSet{"*[bot]"}
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, ignoreUsers, 1)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, ignoreUsers, 1)
 	if len(items) != 0 {
 		t.Errorf("expected empty slice (bot activity should be ignored), got %+v", items)
 	}
 
 	// Without ignoring the bot, we should get the item since the bot's comment
 	// appears as new activity after the user's last touch (which is outside the cooldown)
-	items, err = gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items = ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item when bot is not ignored, got %d", len(items))
 	}
@@ -458,10 +454,7 @@ func TestGitHubNextItemsLimit(t *testing.T) {
 	gh := NewGitHub(runner)
 
 	// limit=2 should return the first 2 matching items
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 2)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 2)
 	if len(items) != 2 {
 		t.Fatalf("NextItems(limit=2) returned %d items, want 2", len(items))
 	}
@@ -473,10 +466,7 @@ func TestGitHubNextItemsLimit(t *testing.T) {
 	}
 
 	// limit=5 with only 3 available should return all 3
-	items, err = gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items = ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
 	if len(items) != 3 {
 		t.Fatalf("NextItems(limit=5) returned %d items, want 3", len(items))
 	}
@@ -517,10 +507,7 @@ func TestGitHubNextItemsUntouchedByAnyone(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
 	// Should include the issue filed by "other" but not the one filed by "me"
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
@@ -599,10 +586,7 @@ func TestGitHubNextItemsApprovalSummary(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
@@ -682,10 +666,7 @@ func TestGitHubNextItemsReactionCountsAsTouch(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
 	// Issue 50 should be skipped (I reacted within 30m), should get issue 51
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
@@ -781,10 +762,7 @@ func TestGitHubNextItemsCommentReactionCountsAsTouch(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
 	// Issue 60 should be skipped (I reacted to a comment within 30m), should get issue 61
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
@@ -905,10 +883,7 @@ func TestGitHubReviewCommentReactionMarksTouched(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
 	// PR 70 should be skipped (I reacted to a review comment within 30m), should get issue 71
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
@@ -976,10 +951,7 @@ func TestGitHubRetryOnRateLimit(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
@@ -1092,10 +1064,7 @@ func TestGitHubReviewReactionCountsAsTouch(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
 	// PR 90 should be skipped (I reacted to a review within 30m), should get issue 91
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
@@ -1148,10 +1117,7 @@ func TestGitHubCommentUserField(t *testing.T) {
 	}
 
 	gh := NewGitHub(runner)
-	items, err := gh.NextItems("o", "r", "me", 1*time.Hour, nil, nil, 5)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := ghCollect(t, gh, "o", "r", "me", 1*time.Hour, nil, nil, 5)
 	if len(items) != 0 {
 		t.Fatalf("NextItems() returned %d items, want 0 (issue should be filtered because user commented recently)", len(items))
 	}

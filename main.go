@@ -90,18 +90,40 @@ func run() error {
 
 	ignore := parsePatterns(*ignoreStr)
 	ignoreUsers := parsePatterns(*ignoreUsersStr)
-	items, err := b.NextItems(info.Owner, info.Name, user, since, ignore, ignoreUsers, *limit)
+
+	width := getTerminalWidth()
+	emitted := 0
+	sepWidth := width
+	if sepWidth > 40 {
+		sepWidth = 40
+	}
+	separator := strings.Repeat("─", sepWidth)
+
+	emit := func(item format.Item) {
+		emitted++
+		if *limit == 1 {
+			fmt.Printf("\033[1m%s\033[0m", format.FormatItem(item, width))
+			return
+		}
+		if emitted > 1 {
+			fmt.Printf("  %s\n", separator)
+		}
+		fmt.Printf("\033[1m▶ %s\n", item.URL)
+		fmt.Printf("  %s\n", item.Title)
+		for _, e := range item.Events {
+			fmt.Printf("    %s\n", format.FormatEvent(e, width-4))
+		}
+		fmt.Print("\033[0m")
+	}
+
+	err = b.NextItems(info.Owner, info.Name, user, since, ignore, ignoreUsers, *limit, emit)
 	if err != nil {
 		return err
 	}
 
-	if len(items) == 0 {
+	if emitted == 0 {
 		fmt.Println("Nothing to do! All items were recently touched by you.")
-		return nil
 	}
-
-	width := getTerminalWidth()
-	fmt.Print(format.FormatItems(items, width))
 
 	return nil
 }

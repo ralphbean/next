@@ -6,7 +6,21 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rbean/next-up/format"
 )
+
+func glCollect(t *testing.T, gl Backend, owner, repo, user string, since time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
+	t.Helper()
+	var items []format.Item
+	err := gl.NextItems(owner, repo, user, since, ignoreEvents, ignoreUsers, limit, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	return items
+}
 
 func TestGitLabCurrentUser(t *testing.T) {
 	runner := func(name string, args ...string) ([]byte, error) {
@@ -95,10 +109,7 @@ func TestGitLabNextItems(t *testing.T) {
 	}
 
 	gl := NewGitLab(runner, "")
-	items, err := gl.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := glCollect(t, gl, "o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
@@ -145,10 +156,7 @@ func TestGitLabNextItemsNoneAvailable(t *testing.T) {
 	}
 
 	gl := NewGitLab(runner, "")
-	items, err := gl.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 1)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := glCollect(t, gl, "o", "r", "me", 30*time.Minute, nil, nil, 1)
 	if len(items) != 0 {
 		t.Errorf("expected empty slice, got %+v", items)
 	}
@@ -200,10 +208,7 @@ func TestGitLabNextItemsLimit(t *testing.T) {
 	gl := NewGitLab(runner, "")
 
 	// limit=2 should return both items
-	items, err := gl.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 2)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := glCollect(t, gl, "o", "r", "me", 30*time.Minute, nil, nil, 2)
 	if len(items) != 2 {
 		t.Fatalf("NextItems(limit=2) returned %d items, want 2", len(items))
 	}
@@ -252,10 +257,7 @@ func TestGitLabNextItemsUntouchedByAnyone(t *testing.T) {
 	}
 
 	gl := NewGitLab(runner, "")
-	items, err := gl.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := glCollect(t, gl, "o", "r", "me", 30*time.Minute, nil, nil, 5)
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
@@ -314,10 +316,7 @@ func TestGitLabNextItemsApprovalNote(t *testing.T) {
 	}
 
 	gl := NewGitLab(runner, "")
-	items, err := gl.NextItems("o", "r", "me", 30*time.Minute, nil, nil, 5)
-	if err != nil {
-		t.Fatalf("NextItems() error: %v", err)
-	}
+	items := glCollect(t, gl, "o", "r", "me", 30*time.Minute, nil, nil, 5)
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
