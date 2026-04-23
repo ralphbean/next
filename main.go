@@ -57,6 +57,7 @@ func run() error {
 	ignoreStr := flag.String("ignore-events", "labeled,unlabeled,mentioned,subscribed,assigned,unassigned,referenced,cross-referenced,head_ref_force_pushed,convert_to_draft,renamed,project_v2_item_status_changed", "comma-separated list of event patterns to ignore (supports * wildcards)")
 	ignoreUsersStr := flag.String("ignore-users", "*[bot]", "comma-separated list of user patterns to ignore (supports * wildcards)")
 	limit := flag.Int("limit", 1, "maximum number of items to show")
+	scopeStr := flag.String("scope", "repo", "scope to search: repo (current repo) or org (all repos in the org)")
 	flag.Parse()
 
 	since, err := parseSince(*sinceStr)
@@ -66,6 +67,11 @@ func run() error {
 
 	if *limit < 1 {
 		return fmt.Errorf("invalid --limit value: must be at least 1")
+	}
+
+	scope := backend.Scope(*scopeStr)
+	if scope != backend.ScopeRepo && scope != backend.ScopeOrg {
+		return fmt.Errorf("invalid --scope value: must be 'repo' or 'org'")
 	}
 
 	gitlabHost := os.Getenv("GITLAB_HOST")
@@ -116,7 +122,7 @@ func run() error {
 		fmt.Print("\033[0m")
 	}
 
-	err = b.NextItems(info.Owner, info.Name, user, since, ignore, ignoreUsers, *limit, emit)
+	err = b.NextItems(info.Owner, info.Name, user, since, ignore, ignoreUsers, *limit, scope, emit)
 	if err != nil {
 		return err
 	}

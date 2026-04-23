@@ -14,7 +14,7 @@ import (
 func ghCollect(t *testing.T, gh Backend, owner, repo, user string, since time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
 	t.Helper()
 	var items []format.Item
-	err := gh.NextItems(owner, repo, user, since, ignoreEvents, ignoreUsers, limit, func(item format.Item) {
+	err := gh.NextItems(owner, repo, user, since, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -1071,6 +1071,77 @@ func TestGitHubReviewReactionCountsAsTouch(t *testing.T) {
 	}
 	if items[0].Title != "Issue I have not touched" {
 		t.Errorf("expected issue 91, got %q", items[0].Title)
+	}
+}
+
+func TestGitHubNextItemsOrgScope(t *testing.T) {
+	now := time.Now()
+
+	// Search API returns issues from different repos in the org
+	searchResult := map[string]interface{}{
+		"total_count": 2,
+		"items": []ghIssue{
+			{
+				Number:    10,
+				Title:     "Issue in repo-a",
+				HTMLURL:   "https://github.com/myorg/repo-a/issues/10",
+				UpdatedAt: now.Add(-10 * time.Minute),
+				User:      ghActor{Login: "other"},
+			},
+			{
+				Number:    5,
+				Title:     "Issue in repo-b",
+				HTMLURL:   "https://github.com/myorg/repo-b/issues/5",
+				UpdatedAt: now.Add(-20 * time.Minute),
+				User:      ghActor{Login: "other"},
+			},
+		},
+	}
+
+	events10 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-10 * time.Minute), Actor: ghActor{Login: "other"}, Body: "please look"},
+	}
+	events5 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-20 * time.Minute), Actor: ghActor{Login: "other"}, Body: "needs review"},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "search/issues" {
+				return json.Marshal(searchResult)
+			}
+			if strings.HasSuffix(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.HasSuffix(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+			if i > 0 && args[i-1] == "repos/myorg/repo-a/issues/10/timeline" {
+				return json.Marshal(events10)
+			}
+			if i > 0 && args[i-1] == "repos/myorg/repo-b/issues/5/timeline" {
+				return json.Marshal(events5)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	var items []format.Item
+	err := gh.NextItems("myorg", "", "me", 30*time.Minute, nil, nil, 2, ScopeOrg, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("NextItems() returned %d items, want 2", len(items))
+	}
+	if items[0].Title != "Issue in repo-a" {
+		t.Errorf("first item: expected 'Issue in repo-a', got %q", items[0].Title)
+	}
+	if items[1].Title != "Issue in repo-b" {
+		t.Errorf("second item: expected 'Issue in repo-b', got %q", items[1].Title)
 	}
 }
 

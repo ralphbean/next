@@ -44,8 +44,16 @@ func matchGlob(pattern, s string) bool {
 	return strings.HasSuffix(s, parts[len(parts)-1])
 }
 
+// Scope controls whether to search within a single repo or across an org.
+type Scope string
+
+const (
+	ScopeRepo Scope = "repo"
+	ScopeOrg  Scope = "org"
+)
+
 // Backend fetches issues/PRs from a hosting platform.
 type Backend interface {
 	CurrentUser() (string, error)
-	NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, emit func(format.Item)) error
+	NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error
 }

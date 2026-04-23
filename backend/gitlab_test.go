@@ -13,7 +13,7 @@ import (
 func glCollect(t *testing.T, gl Backend, owner, repo, user string, since time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
 	t.Helper()
 	var items []format.Item
-	err := gl.NextItems(owner, repo, user, since, ignoreEvents, ignoreUsers, limit, func(item format.Item) {
+	err := gl.NextItems(owner, repo, user, since, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -272,6 +272,74 @@ func TestGitLabNextItemsUntouchedByAnyone(t *testing.T) {
 	}
 	if items[0].Events[0].Author != "other" {
 		t.Errorf("expected author 'other', got %q", items[0].Events[0].Author)
+	}
+}
+
+func TestGitLabNextItemsOrgScope(t *testing.T) {
+	now := time.Now()
+
+	issues := []glIssue{
+		{
+			IID:       1,
+			Title:     "Issue in project A",
+			WebURL:    "https://gitlab.com/mygroup/project-a/-/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+			Author:    glNoteAuthor{Username: "other"},
+			ProjectID: 100,
+		},
+	}
+	mrs := []glMR{
+		{
+			IID:       2,
+			Title:     "MR in project B",
+			WebURL:    "https://gitlab.com/mygroup/project-b/-/merge_requests/2",
+			UpdatedAt: now.Add(-20 * time.Minute),
+			Author:    glNoteAuthor{Username: "other"},
+			ProjectID: 200,
+		},
+	}
+
+	notes1 := []glNote{
+		{Body: "please look", CreatedAt: now.Add(-10 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+	}
+	notesMR2 := []glNote{
+		{Body: "needs review", CreatedAt: now.Add(-20 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.HasPrefix(a, "groups/mygroup/issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.HasPrefix(a, "groups/mygroup/merge_requests?") {
+				return json.Marshal(mrs)
+			}
+			if a == "projects/100/issues/1/notes" {
+				return json.Marshal(notes1)
+			}
+			if a == "projects/200/merge_requests/2/notes" {
+				return json.Marshal(notesMR2)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	var items []format.Item
+	err := gl.NextItems("mygroup", "", "me", 30*time.Minute, nil, nil, 5, ScopeOrg, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("NextItems() returned %d items, want 2", len(items))
+	}
+	if items[0].Title != "Issue in project A" {
+		t.Errorf("first item: expected 'Issue in project A', got %q", items[0].Title)
+	}
+	if items[1].Title != "MR in project B" {
+		t.Errorf("second item: expected 'MR in project B', got %q", items[1].Title)
 	}
 }
 

@@ -44,6 +44,7 @@ type glIssue struct {
 	CreatedAt time.Time    `json:"created_at"`
 	UpdatedAt time.Time    `json:"updated_at"`
 	Author    glNoteAuthor `json:"author"`
+	ProjectID int          `json:"project_id"`
 }
 
 type glMR struct {
@@ -53,6 +54,7 @@ type glMR struct {
 	CreatedAt time.Time    `json:"created_at"`
 	UpdatedAt time.Time    `json:"updated_at"`
 	Author    glNoteAuthor `json:"author"`
+	ProjectID int          `json:"project_id"`
 }
 
 type glUser struct {
@@ -61,13 +63,14 @@ type glUser struct {
 
 // glItem is a unified type for sorting issues and MRs together.
 type glItem struct {
-	IID       int
-	Title     string
-	WebURL    string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Author    string
-	Kind      string // "issues" or "merge_requests"
+	IID        int
+	Title      string
+	WebURL     string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	Author     string
+	Kind       string // "issues" or "merge_requests"
+	ProjectRef string // URL-encoded project path or numeric project ID for API calls
 }
 
 type gitLab struct {
@@ -95,23 +98,34 @@ func (g *gitLab) CurrentUser() (string, error) {
 	return u.Username, nil
 }
 
-func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, emit func(format.Item)) error {
-	projectPath := url.PathEscape(owner + "/" + repo)
-
+func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error {
 	// Fetch issues and MRs in parallel
 	var issues []glIssue
 	var mrs []glMR
 	var issErr, mrErr error
 	var listWg sync.WaitGroup
 	listWg.Add(2)
-	go func() {
-		defer listWg.Done()
-		issues, issErr = g.listIssues(projectPath)
-	}()
-	go func() {
-		defer listWg.Done()
-		mrs, mrErr = g.listMRs(projectPath)
-	}()
+	if scope == ScopeOrg {
+		groupPath := url.PathEscape(owner)
+		go func() {
+			defer listWg.Done()
+			issues, issErr = g.listGroupIssues(groupPath)
+		}()
+		go func() {
+			defer listWg.Done()
+			mrs, mrErr = g.listGroupMRs(groupPath)
+		}()
+	} else {
+		projectPath := url.PathEscape(owner + "/" + repo)
+		go func() {
+			defer listWg.Done()
+			issues, issErr = g.listIssues(projectPath)
+		}()
+		go func() {
+			defer listWg.Done()
+			mrs, mrErr = g.listMRs(projectPath)
+		}()
+	}
 	listWg.Wait()
 	if issErr != nil {
 		return issErr
@@ -122,18 +136,29 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 
 	// Merge into unified list sorted by updated_at descending
 	var items []glItem
+	projectRef := url.PathEscape(owner + "/" + repo)
 	for _, iss := range issues {
+		ref := projectRef
+		if scope == ScopeOrg {
+			ref = fmt.Sprintf("%d", iss.ProjectID)
+		}
 		items = append(items, glItem{
 			IID: iss.IID, Title: iss.Title, WebURL: iss.WebURL,
 			CreatedAt: iss.CreatedAt, UpdatedAt: iss.UpdatedAt,
 			Author: iss.Author.Username, Kind: "issues",
+			ProjectRef: ref,
 		})
 	}
 	for _, mr := range mrs {
+		ref := projectRef
+		if scope == ScopeOrg {
+			ref = fmt.Sprintf("%d", mr.ProjectID)
+		}
 		items = append(items, glItem{
 			IID: mr.IID, Title: mr.Title, WebURL: mr.WebURL,
 			CreatedAt: mr.CreatedAt, UpdatedAt: mr.UpdatedAt,
 			Author: mr.Author.Username, Kind: "merge_requests",
+			ProjectRef: ref,
 		})
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -144,7 +169,7 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 
 	found := 0
 	for _, item := range items {
-		notes, err := g.getNotes(projectPath, item.Kind, item.IID)
+		notes, err := g.getNotes(item.ProjectRef, item.Kind, item.IID)
 		if err != nil {
 			return err
 		}
@@ -280,6 +305,32 @@ func (g *gitLab) listMRs(projectPath string) ([]glMR, error) {
 	var mrs []glMR
 	if err := json.Unmarshal(fixPaginatedJSON(out), &mrs); err != nil {
 		return nil, fmt.Errorf("failed to parse GitLab MRs: %w", err)
+	}
+	return mrs, nil
+}
+
+func (g *gitLab) listGroupIssues(groupPath string) ([]glIssue, error) {
+	endpoint := fmt.Sprintf("groups/%s/issues?state=opened&order_by=updated_at&sort=desc&per_page=100", groupPath)
+	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list group issues: %w", err)
+	}
+	var issues []glIssue
+	if err := json.Unmarshal(fixPaginatedJSON(out), &issues); err != nil {
+		return nil, fmt.Errorf("failed to parse group issues: %w", err)
+	}
+	return issues, nil
+}
+
+func (g *gitLab) listGroupMRs(groupPath string) ([]glMR, error) {
+	endpoint := fmt.Sprintf("groups/%s/merge_requests?state=opened&order_by=updated_at&sort=desc&per_page=100", groupPath)
+	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list group MRs: %w", err)
+	}
+	var mrs []glMR
+	if err := json.Unmarshal(fixPaginatedJSON(out), &mrs); err != nil {
+		return nil, fmt.Errorf("failed to parse group MRs: %w", err)
 	}
 	return mrs, nil
 }

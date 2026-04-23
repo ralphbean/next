@@ -142,24 +142,16 @@ func (g *gitHub) CurrentUser() (string, error) {
 	return u.Login, nil
 }
 
-func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, emit func(format.Item)) error {
-	// Fetch all open issues (includes PRs) sorted by updated
-	endpoint := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
-	out, err := g.runAPI("gh", "api", endpoint,
-		"--paginate",
-		"--method", "GET",
-		"-f", "state=open",
-		"-f", "sort=updated",
-		"-f", "direction=desc",
-		"-f", "per_page=100",
-	)
-	if err != nil {
-		return fmt.Errorf("failed to list issues: %w", err)
-	}
-
+func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error {
 	var issues []ghIssue
-	if err := json.Unmarshal(out, &issues); err != nil {
-		return fmt.Errorf("failed to parse issues: %w", err)
+	var err error
+	if scope == ScopeOrg {
+		issues, err = g.searchOrgIssues(owner)
+	} else {
+		issues, err = g.listRepoIssues(owner, repo)
+	}
+	if err != nil {
+		return err
 	}
 
 	// Sort by updated descending (most recent first)
@@ -171,6 +163,15 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 
 	found := 0
 	for _, issue := range issues {
+		// For org scope, extract owner/repo per issue from its URL
+		issueOwner, issueRepo := owner, repo
+		if scope == ScopeOrg {
+			issueOwner, issueRepo = parseRepoFromURL(issue.HTMLURL)
+			if issueOwner == "" || issueRepo == "" {
+				continue
+			}
+		}
+
 		kind := "issue"
 		if issue.PullRequest != nil {
 			kind = "PR"
@@ -182,31 +183,31 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		}
 
 		// Fetch details lazily per issue to avoid rate limiting
-		events, err := g.getTimeline(owner, repo, issue.Number)
+		events, err := g.getTimeline(issueOwner, issueRepo, issue.Number)
 		if err != nil {
 			return err
 		}
-		issueReactions, err := g.getReactions(owner, repo, issue.Number)
+		issueReactions, err := g.getReactions(issueOwner, issueRepo, issue.Number)
 		if err != nil {
 			return err
 		}
-		commentReactions, err := g.getCommentReactions(owner, repo, issue.Number)
+		commentReactions, err := g.getCommentReactions(issueOwner, issueRepo, issue.Number)
 		if err != nil {
 			return err
 		}
 		var reviews []ghReview
 		var reviewCommentReactions []ghReaction
 		if issue.PullRequest != nil {
-			reviews, err = g.getReviews(owner, repo, issue.Number)
+			reviews, err = g.getReviews(issueOwner, issueRepo, issue.Number)
 			if err != nil {
 				return err
 			}
-			reviewCommentReactions, err = g.getReviewCommentReactions(owner, repo, issue.Number)
+			reviewCommentReactions, err = g.getReviewCommentReactions(issueOwner, issueRepo, issue.Number)
 			if err != nil {
 				return err
 			}
 			var reviewReactions []ghReaction
-			reviewReactions, err = g.getReviewReactions(owner, repo, issue.Number)
+			reviewReactions, err = g.getReviewReactions(issueOwner, issueRepo, issue.Number)
 			if err != nil {
 				return err
 			}
@@ -365,6 +366,57 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 	}
 
 	return nil
+}
+
+func (g *gitHub) listRepoIssues(owner, repo string) ([]ghIssue, error) {
+	endpoint := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
+	out, err := g.runAPI("gh", "api", endpoint,
+		"--paginate",
+		"--method", "GET",
+		"-f", "state=open",
+		"-f", "sort=updated",
+		"-f", "direction=desc",
+		"-f", "per_page=100",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list issues: %w", err)
+	}
+	var issues []ghIssue
+	if err := json.Unmarshal(out, &issues); err != nil {
+		return nil, fmt.Errorf("failed to parse issues: %w", err)
+	}
+	return issues, nil
+}
+
+func (g *gitHub) searchOrgIssues(org string) ([]ghIssue, error) {
+	query := fmt.Sprintf("org:%s is:open", org)
+	out, err := g.runAPI("gh", "api", "search/issues",
+		"--method", "GET",
+		"-f", "q="+query,
+		"-f", "sort=updated",
+		"-f", "order=desc",
+		"-f", "per_page=100",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search org issues: %w", err)
+	}
+	var result struct {
+		Items []ghIssue `json:"items"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse search results: %w", err)
+	}
+	return result.Items, nil
+}
+
+// parseRepoFromURL extracts owner and repo from a GitHub issue/PR URL
+// like "https://github.com/OWNER/REPO/issues/123".
+func parseRepoFromURL(htmlURL string) (string, string) {
+	parts := strings.Split(htmlURL, "/")
+	if len(parts) >= 5 {
+		return parts[3], parts[4]
+	}
+	return "", ""
 }
 
 func (g *gitHub) getTimeline(owner, repo string, number int) ([]ghTimelineEvent, error) {
