@@ -7,7 +7,7 @@ It finds the most recently updated item that you haven't touched within a cooldo
 ## Install
 
 ```
-go install github.com/rbean/next-up@latest
+go install github.com/ralphbean/next@latest
 ```
 
 ## Usage

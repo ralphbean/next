@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rbean/next-up/format"
+	"github.com/ralphbean/next/format"
 )
 
 func glCollect(t *testing.T, gl Backend, owner, repo, user string, since time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {

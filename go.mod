@@ -1,4 +1,4 @@
-module github.com/rbean/next-up
+module github.com/ralphbean/next
 
 go 1.25.8
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rbean/next-up/format"
+	"github.com/ralphbean/next/format"
 )
 
 type ghActor struct {
