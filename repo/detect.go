@@ -2,7 +2,6 @@ package repo
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -82,12 +81,11 @@ func detectPlatform(host, gitlabHost string) Platform {
 	return GitHub
 }
 
-// Detect reads the git remote origin URL from the current directory
-// and returns parsed repo info.
-func Detect(gitlabHost string) (Info, error) {
-	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+// Detect reads the URL for the named git remote and returns parsed repo info.
+func Detect(run func(string, ...string) ([]byte, error), remoteName, gitlabHost string) (Info, error) {
+	out, err := run("git", "remote", "get-url", remoteName)
 	if err != nil {
-		return Info{}, fmt.Errorf("not in a git repository or no remote 'origin' configured: %w", err)
+		return Info{}, fmt.Errorf("no remote %q configured: %w", remoteName, err)
 	}
 	url := strings.TrimSpace(string(out))
 	return ParseRemoteURL(url, gitlabHost)
