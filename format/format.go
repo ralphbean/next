@@ -16,6 +16,20 @@ type Item struct {
 	URL    string
 	Title  string
 	Events []Event
+	Tier   int
+}
+
+func TierLabel(tier int) string {
+	switch tier {
+	case 1:
+		return "\033[1;33m[authored]\033[0m"
+	case 2:
+		return "\033[36m[participated]\033[0m"
+	case 3:
+		return "\033[2m[general]\033[0m"
+	default:
+		return ""
+	}
 }
 
 // RelativeTime returns a human-readable relative time string.
@@ -51,7 +65,11 @@ func FormatEvent(e Event, maxWidth int) string {
 // FormatItem formats an item with its URL, title, and events.
 func FormatItem(item Item, maxWidth int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n", item.URL)
+	if label := TierLabel(item.Tier); label != "" {
+		fmt.Fprintf(&b, "%s %s\n", label, item.URL)
+	} else {
+		fmt.Fprintf(&b, "%s\n", item.URL)
+	}
 	fmt.Fprintf(&b, "%s\n", item.Title)
 	for _, e := range item.Events {
 		fmt.Fprintf(&b, "  %s\n", FormatEvent(e, maxWidth-2))
@@ -77,7 +95,11 @@ func FormatItems(items []Item, maxWidth int) string {
 		if i > 0 {
 			fmt.Fprintf(&b, "  %s\n", separator)
 		}
-		fmt.Fprintf(&b, "▶ %s\n", item.URL)
+		if label := TierLabel(item.Tier); label != "" {
+			fmt.Fprintf(&b, "▶ %s %s\n", label, item.URL)
+		} else {
+			fmt.Fprintf(&b, "▶ %s\n", item.URL)
+		}
 		fmt.Fprintf(&b, "  %s\n", item.Title)
 		for _, e := range item.Events {
 			fmt.Fprintf(&b, "    %s\n", FormatEvent(e, maxWidth-4))

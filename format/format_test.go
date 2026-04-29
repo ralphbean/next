@@ -190,3 +190,80 @@ func TestFormatItemsSingle(t *testing.T) {
 		t.Error("single item should not have separator line")
 	}
 }
+
+func TestTierLabel(t *testing.T) {
+	tests := []struct {
+		tier int
+		want string
+	}{
+		{1, "[authored]"},
+		{2, "[participated]"},
+		{3, "[general]"},
+		{0, ""},
+	}
+	for _, tt := range tests {
+		got := TierLabel(tt.tier)
+		// Strip ANSI codes for content check
+		stripped := stripANSI(got)
+		if stripped != tt.want {
+			t.Errorf("TierLabel(%d) = %q, want %q", tt.tier, stripped, tt.want)
+		}
+	}
+}
+
+// stripANSI removes ANSI escape sequences for testing.
+func stripANSI(s string) string {
+	result := s
+	for {
+		start := strings.Index(result, "\033[")
+		if start == -1 {
+			break
+		}
+		end := strings.IndexByte(result[start:], 'm')
+		if end == -1 {
+			break
+		}
+		result = result[:start] + result[start+end+1:]
+	}
+	return result
+}
+
+func TestFormatItemWithTier(t *testing.T) {
+	item := Item{
+		URL:   "https://github.com/owner/repo/issues/42",
+		Title: "Fix the widget",
+		Tier:  1,
+		Events: []Event{
+			{
+				Timestamp: time.Now().Add(-1 * time.Hour),
+				Author:    "alice",
+				Summary:   "commented: looks good",
+			},
+		},
+	}
+	got := FormatItem(item, 120)
+	if !strings.Contains(got, "[authored]") {
+		t.Errorf("expected [authored] label in output, got:\n%s", got)
+	}
+	if !strings.Contains(got, item.URL) {
+		t.Errorf("expected URL in output")
+	}
+}
+
+func TestFormatItemWithoutTier(t *testing.T) {
+	item := Item{
+		URL:   "https://github.com/owner/repo/issues/42",
+		Title: "Fix the widget",
+		Events: []Event{
+			{
+				Timestamp: time.Now().Add(-1 * time.Hour),
+				Author:    "alice",
+				Summary:   "commented: looks good",
+			},
+		},
+	}
+	got := FormatItem(item, 120)
+	if strings.Contains(got, "[authored]") || strings.Contains(got, "[participated]") || strings.Contains(got, "[general]") {
+		t.Errorf("expected no tier label when Tier is 0, got:\n%s", got)
+	}
+}
