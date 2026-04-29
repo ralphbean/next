@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rbean/next-up/format"
+	"github.com/ralphbean/next/format"
 )
 
 // CmdRunner executes a command and returns its output.

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rbean/next-up/backend"
-	"github.com/rbean/next-up/duration"
-	"github.com/rbean/next-up/format"
-	"github.com/rbean/next-up/repo"
+	"github.com/ralphbean/next/backend"
+	"github.com/ralphbean/next/duration"
+	"github.com/ralphbean/next/format"
+	"github.com/ralphbean/next/repo"
 	"golang.org/x/term"
 )
 

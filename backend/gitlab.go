@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rbean/next-up/format"
+	"github.com/ralphbean/next/format"
 )
 
 // fixPaginatedJSON handles glab's --paginate output which concatenates
