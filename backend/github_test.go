@@ -1193,3 +1193,213 @@ func TestGitHubCommentUserField(t *testing.T) {
 		t.Fatalf("NextItems() returned %d items, want 0 (issue should be filtered because user commented recently)", len(items))
 	}
 }
+
+func TestGitHubTierAuthoredBeforeGeneral(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    1,
+			Title:     "General issue (more recent)",
+			HTMLURL:   "https://github.com/o/r/issues/1",
+			UpdatedAt: now.Add(-5 * time.Minute),
+			User:      ghActor{Login: "other"},
+		},
+		{
+			Number:    2,
+			Title:     "My authored issue (older)",
+			HTMLURL:   "https://github.com/o/r/issues/2",
+			UpdatedAt: now.Add(-20 * time.Minute),
+			User:      ghActor{Login: "me"},
+		},
+	}
+
+	events1 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-5 * time.Minute), Actor: ghActor{Login: "other"}, Body: "general comment"},
+	}
+	events2 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-20 * time.Minute), Actor: ghActor{Login: "other"}, Body: "comment on my issue"},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if strings.HasSuffix(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.HasSuffix(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/1/timeline" {
+				return json.Marshal(events1)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/2/timeline" {
+				return json.Marshal(events2)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 1)
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
+	}
+	if items[0].Title != "My authored issue (older)" {
+		t.Errorf("expected authored issue to win, got %q", items[0].Title)
+	}
+	if items[0].Tier != 1 {
+		t.Errorf("expected Tier 1, got %d", items[0].Tier)
+	}
+}
+
+func TestGitHubTierParticipatedBeforeGeneral(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    1,
+			Title:     "General issue (more recent)",
+			HTMLURL:   "https://github.com/o/r/issues/1",
+			UpdatedAt: now.Add(-5 * time.Minute),
+			User:      ghActor{Login: "stranger"},
+		},
+		{
+			Number:    2,
+			Title:     "Issue I commented on before (older)",
+			HTMLURL:   "https://github.com/o/r/issues/2",
+			UpdatedAt: now.Add(-20 * time.Minute),
+			User:      ghActor{Login: "other"},
+		},
+	}
+
+	events1 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-5 * time.Minute), Actor: ghActor{Login: "stranger"}, Body: "general comment"},
+	}
+	events2 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-2 * time.Hour), Actor: ghActor{Login: "me"}, Body: "my old comment"},
+		{Event: "commented", CreatedAt: now.Add(-20 * time.Minute), Actor: ghActor{Login: "other"}, Body: "reply to me"},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if strings.HasSuffix(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.HasSuffix(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/1/timeline" {
+				return json.Marshal(events1)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/2/timeline" {
+				return json.Marshal(events2)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 1)
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
+	}
+	if items[0].Title != "Issue I commented on before (older)" {
+		t.Errorf("expected participated issue to win, got %q", items[0].Title)
+	}
+	if items[0].Tier != 2 {
+		t.Errorf("expected Tier 2, got %d", items[0].Tier)
+	}
+}
+
+func TestGitHubTierOrdering(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    1,
+			Title:     "General issue (most recent)",
+			HTMLURL:   "https://github.com/o/r/issues/1",
+			UpdatedAt: now.Add(-5 * time.Minute),
+			User:      ghActor{Login: "stranger"},
+		},
+		{
+			Number:    2,
+			Title:     "Participated issue",
+			HTMLURL:   "https://github.com/o/r/issues/2",
+			UpdatedAt: now.Add(-15 * time.Minute),
+			User:      ghActor{Login: "other"},
+		},
+		{
+			Number:    3,
+			Title:     "Authored issue (oldest)",
+			HTMLURL:   "https://github.com/o/r/issues/3",
+			UpdatedAt: now.Add(-25 * time.Minute),
+			User:      ghActor{Login: "me"},
+		},
+	}
+
+	events1 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-5 * time.Minute), Actor: ghActor{Login: "stranger"}, Body: "hello"},
+	}
+	events2 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-2 * time.Hour), Actor: ghActor{Login: "me"}, Body: "my old comment"},
+		{Event: "commented", CreatedAt: now.Add(-15 * time.Minute), Actor: ghActor{Login: "other"}, Body: "reply"},
+	}
+	events3 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-25 * time.Minute), Actor: ghActor{Login: "other"}, Body: "comment on my issue"},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if strings.HasSuffix(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.HasSuffix(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/1/timeline" {
+				return json.Marshal(events1)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/2/timeline" {
+				return json.Marshal(events2)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/3/timeline" {
+				return json.Marshal(events3)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
+	if len(items) != 3 {
+		t.Fatalf("NextItems() returned %d items, want 3", len(items))
+	}
+	if items[0].Title != "Authored issue (oldest)" {
+		t.Errorf("first item: expected authored, got %q", items[0].Title)
+	}
+	if items[0].Tier != 1 {
+		t.Errorf("first item: expected Tier 1, got %d", items[0].Tier)
+	}
+	if items[1].Title != "Participated issue" {
+		t.Errorf("second item: expected participated, got %q", items[1].Title)
+	}
+	if items[1].Tier != 2 {
+		t.Errorf("second item: expected Tier 2, got %d", items[1].Tier)
+	}
+	if items[2].Title != "General issue (most recent)" {
+		t.Errorf("third item: expected general, got %q", items[2].Title)
+	}
+	if items[2].Tier != 3 {
+		t.Errorf("third item: expected Tier 3, got %d", items[2].Tier)
+	}
+}

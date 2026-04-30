@@ -161,7 +161,13 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 
 	cutoff := time.Now().Add(-since)
 
-	found := 0
+	type candidate struct {
+		item      format.Item
+		tier      int
+		updatedAt time.Time
+	}
+	var candidates []candidate
+
 	for _, issue := range issues {
 		// For org scope, extract owner/repo per issue from its URL
 		issueOwner, issueRepo := owner, repo
@@ -354,15 +360,37 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			})
 		}
 
-		emit(format.Item{
-			URL:    issue.HTMLURL,
-			Title:  issue.Title,
-			Events: fmtEvents,
+		tier := 3
+		if issue.User.Login == user {
+			tier = 1
+		} else if !lastUserTime.IsZero() {
+			tier = 2
+		}
+
+		candidates = append(candidates, candidate{
+			item: format.Item{
+				URL:    issue.HTMLURL,
+				Title:  issue.Title,
+				Events: fmtEvents,
+				Tier:   tier,
+			},
+			tier:      tier,
+			updatedAt: issue.UpdatedAt,
 		})
-		found++
-		if found >= limit {
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].tier != candidates[j].tier {
+			return candidates[i].tier < candidates[j].tier
+		}
+		return candidates[i].updatedAt.After(candidates[j].updatedAt)
+	})
+
+	for i, c := range candidates {
+		if i >= limit {
 			break
 		}
+		emit(c.item)
 	}
 
 	return nil
