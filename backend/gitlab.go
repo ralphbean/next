@@ -167,7 +167,13 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 
 	cutoff := time.Now().Add(-since)
 
-	found := 0
+	type candidate struct {
+		item      format.Item
+		tier      int
+		updatedAt time.Time
+	}
+	var candidates []candidate
+
 	for _, item := range items {
 		notes, err := g.getNotes(item.ProjectRef, item.Kind, item.IID)
 		if err != nil {
@@ -269,15 +275,37 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 			})
 		}
 
-		emit(format.Item{
-			URL:    item.WebURL,
-			Title:  item.Title,
-			Events: fmtEvents,
+		tier := 3
+		if item.Author == user {
+			tier = 1
+		} else if !lastUserTime.IsZero() {
+			tier = 2
+		}
+
+		candidates = append(candidates, candidate{
+			item: format.Item{
+				URL:    item.WebURL,
+				Title:  item.Title,
+				Events: fmtEvents,
+				Tier:   tier,
+			},
+			tier:      tier,
+			updatedAt: item.UpdatedAt,
 		})
-		found++
-		if found >= limit {
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].tier != candidates[j].tier {
+			return candidates[i].tier < candidates[j].tier
+		}
+		return candidates[i].updatedAt.After(candidates[j].updatedAt)
+	})
+
+	for i, c := range candidates {
+		if i >= limit {
 			break
 		}
+		emit(c.item)
 	}
 
 	return nil
