@@ -165,7 +165,11 @@ func run() error {
 		if emitted > 1 {
 			fmt.Printf("  %s\n", separator)
 		}
-		fmt.Printf("\033[1m▶ %s\n", item.URL)
+		if label := format.TierLabel(item.Tier); label != "" {
+			fmt.Printf("\033[1m▶ %s %s\n", label, item.URL)
+		} else {
+			fmt.Printf("\033[1m▶ %s\n", item.URL)
+		}
 		fmt.Printf("  %s\n", item.Title)
 		for _, e := range item.Events {
 			fmt.Printf("    %s\n", format.FormatEvent(e, width-4))
