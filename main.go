@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -53,12 +54,26 @@ func defaultRunner(name string, args ...string) ([]byte, error) {
 	return out, err
 }
 
+func openBrowser(url string) error {
+	var cmd string
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = "open"
+	case "windows":
+		cmd = "start"
+	default:
+		cmd = "xdg-open"
+	}
+	return exec.Command(cmd, url).Start()
+}
+
 func run() error {
 	sinceStr := flag.String("since", "30m", "cooldown before showing items you recently touched (e.g., 30m, 1h, 3d)")
 	ignoreStr := flag.String("ignore-events", "labeled,unlabeled,mentioned,subscribed,assigned,unassigned,referenced,cross-referenced,head_ref_force_pushed,convert_to_draft,renamed,project_v2_item_status_changed", "comma-separated list of event patterns to ignore (supports * wildcards)")
 	ignoreUsersStr := flag.String("ignore-users", "*[bot]", "comma-separated list of user patterns to ignore (supports * wildcards)")
 	limit := flag.Int("limit", 1, "maximum number of items to show")
 	scopeStr := flag.String("scope", "repo", "scope to search: repo (current repo) or org (all repos in the org)")
+	autoOpen := flag.Bool("auto-open", false, "automatically open each result in the browser")
 	showConfig := flag.Bool("show-config", false, "show configured remotes for all repos")
 	configFlag := flag.Bool("config", false, "show config and available remotes, then choose which remote to track")
 	flag.Parse()
@@ -130,6 +145,7 @@ func run() error {
 	ignoreUsers := parsePatterns(*ignoreUsersStr)
 
 	width := getTerminalWidth()
+	var urls []string
 	emitted := 0
 	sepWidth := width
 	if sepWidth > 40 {
@@ -139,6 +155,9 @@ func run() error {
 
 	emit := func(item format.Item) {
 		emitted++
+		if *autoOpen {
+			urls = append(urls, item.URL)
+		}
 		if *limit == 1 {
 			fmt.Printf("\033[1m%s\033[0m", format.FormatItem(item, width))
 			return
@@ -161,6 +180,12 @@ func run() error {
 
 	if emitted == 0 {
 		fmt.Println("Nothing to do! All items were recently touched by you.")
+	}
+
+	for _, u := range urls {
+		if err := openBrowser(u); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to open %s: %v\n", u, err)
+		}
 	}
 
 	return nil
