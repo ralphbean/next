@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ralphbean/next/backend"
+	"github.com/ralphbean/next/config"
 	"github.com/ralphbean/next/duration"
 	"github.com/ralphbean/next/format"
 	"github.com/ralphbean/next/repo"
@@ -58,7 +59,32 @@ func run() error {
 	ignoreUsersStr := flag.String("ignore-users", "*[bot]", "comma-separated list of user patterns to ignore (supports * wildcards)")
 	limit := flag.Int("limit", 1, "maximum number of items to show")
 	scopeStr := flag.String("scope", "repo", "scope to search: repo (current repo) or org (all repos in the org)")
+	showConfig := flag.Bool("show-config", false, "show configured remotes for all repos")
+	configFlag := flag.Bool("config", false, "show config and available remotes, then choose which remote to track")
 	flag.Parse()
+
+	cfgPath, err := config.ConfigPath()
+	if err != nil {
+		return err
+	}
+
+	getURL := func(remote string) string {
+		out, err := defaultRunner("git", "remote", "get-url", remote)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	if *showConfig {
+		return config.ShowConfig(defaultRunner, cfgPath, getURL)
+	}
+
+	prompter := config.TTYPrompter{GetURL: getURL}
+
+	if *configFlag {
+		return config.InteractiveConfig(defaultRunner, prompter, cfgPath)
+	}
 
 	since, err := parseSince(*sinceStr)
 	if err != nil {
@@ -76,9 +102,15 @@ func run() error {
 
 	gitlabHost := os.Getenv("GITLAB_HOST")
 
-	info, err := repo.Detect(gitlabHost)
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	remoteName, err := config.ResolveRemote(defaultRunner, prompter, interactive, cfgPath)
 	if err != nil {
-		return fmt.Errorf("error: %w\nAre you in a git repository with a remote 'origin'?", err)
+		return fmt.Errorf("error resolving remote: %w", err)
+	}
+
+	info, err := repo.Detect(defaultRunner, remoteName, gitlabHost)
+	if err != nil {
+		return fmt.Errorf("error: %w\nAre you in a git repository with a remote %q?", err, remoteName)
 	}
 
 	var b backend.Backend
