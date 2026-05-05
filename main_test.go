@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestParseSinceFlag(t *testing.T) {
+func TestParseDuration(t *testing.T) {
 	tests := []struct {
 		input string
 		want  time.Duration
@@ -16,19 +16,19 @@ func TestParseSinceFlag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got, err := parseSince(tt.input)
+			got, err := parseDuration(tt.input)
 			if err != nil {
-				t.Fatalf("parseSince(%q) error: %v", tt.input, err)
+				t.Fatalf("parseDuration(%q) error: %v", tt.input, err)
 			}
 			if got != tt.want {
-				t.Errorf("parseSince(%q) = %v, want %v", tt.input, got, tt.want)
+				t.Errorf("parseDuration(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestParseSinceFlagInvalid(t *testing.T) {
-	_, err := parseSince("banana")
+func TestParseDurationInvalid(t *testing.T) {
+	_, err := parseDuration("banana")
 	if err == nil {
 		t.Error("expected error for invalid duration")
 	}
