@@ -29,7 +29,15 @@ All command execution goes through `backend.CmdRunner` (`func(name string, args 
 
 ## CLI Flags
 
-- `--since <duration>` — cooldown period before an item the user touched reappears (default `30m`). Accepts Go-style durations plus `d` for days (e.g., `1h`, `3d`).
+- `--cooldown <duration>` — cooldown period before an item the user touched reappears (default `30m`). Accepts Go-style durations plus `d` for days (e.g., `1h`, `3d`).
+- `--since <duration>` — only fetch items updated within this window, passed to the API to reduce calls (default `24h`). Accepts the same duration format.
+- `--ignore-events <patterns>` — comma-separated list of event patterns to ignore (supports `*` wildcards).
+- `--ignore-users <patterns>` — comma-separated list of user patterns to ignore (supports `*` wildcards).
+- `--limit <n>` — maximum number of items to show (default `1`).
+- `--scope <repo|org>` — search within the current repo or across all repos in the org.
+- `--auto-open` — automatically open each result in the browser.
+- `--show-config` — show configured remotes for all repos.
+- `--config` — interactive remote configuration.
 
 ## Key Design Decisions
 
