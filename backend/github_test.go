@@ -11,10 +11,10 @@ import (
 	"github.com/ralphbean/next/format"
 )
 
-func ghCollect(t *testing.T, gh Backend, owner, repo, user string, since time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
+func ghCollect(t *testing.T, gh Backend, owner, repo, user string, cooldown time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
 	t.Helper()
 	var items []format.Item
-	err := gh.NextItems(owner, repo, user, since, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
+	err := gh.NextItems(owner, repo, user, cooldown, time.Time{}, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -1128,7 +1128,7 @@ func TestGitHubNextItemsOrgScope(t *testing.T) {
 
 	gh := NewGitHub(runner)
 	var items []format.Item
-	err := gh.NextItems("myorg", "", "me", 30*time.Minute, nil, nil, 2, ScopeOrg, func(item format.Item) {
+	err := gh.NextItems("myorg", "", "me", 30*time.Minute, time.Time{}, nil, nil, 2, ScopeOrg, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -1401,5 +1401,131 @@ func TestGitHubTierOrdering(t *testing.T) {
 	}
 	if items[2].Tier != 3 {
 		t.Errorf("third item: expected Tier 3, got %d", items[2].Tier)
+	}
+}
+
+func TestGitHubSincePassedToAPI(t *testing.T) {
+	now := time.Now()
+	sinceTime := now.Add(-7 * 24 * time.Hour) // 7 days ago
+
+	issues := []ghIssue{
+		{
+			Number:    1,
+			Title:     "Some issue",
+			HTMLURL:   "https://github.com/o/r/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+			User:      ghActor{Login: "other"},
+		},
+	}
+
+	events1 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-10 * time.Minute), Actor: ghActor{Login: "other"}, Body: "hello"},
+	}
+
+	var capturedArgs []string
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if a == "repos/o/r/issues" {
+				// Capture the full args for the issues listing call
+				capturedArgs = append([]string{name}, args...)
+				return json.Marshal(issues)
+			}
+			if strings.HasSuffix(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.HasSuffix(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+			if strings.HasSuffix(a, "/timeline") {
+				return json.Marshal(events1)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	var items []format.Item
+	err := gh.NextItems("o", "r", "me", 30*time.Minute, sinceTime, nil, nil, 5, ScopeRepo, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+
+	// Verify that the captured args contain the since parameter
+	expectedSince := "since=" + sinceTime.Format(time.RFC3339)
+	found := false
+	for _, a := range capturedArgs {
+		if a == expectedSince {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected args to contain %q, got %v", expectedSince, capturedArgs)
+	}
+}
+
+func TestGitHubSincePassedToOrgSearch(t *testing.T) {
+	now := time.Now()
+	sinceTime := now.Add(-14 * 24 * time.Hour) // 14 days ago
+
+	searchResult := map[string]interface{}{
+		"total_count": 1,
+		"items": []ghIssue{
+			{
+				Number:    10,
+				Title:     "Org issue",
+				HTMLURL:   "https://github.com/myorg/repo-a/issues/10",
+				UpdatedAt: now.Add(-10 * time.Minute),
+				User:      ghActor{Login: "other"},
+			},
+		},
+	}
+
+	events10 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-10 * time.Minute), Actor: ghActor{Login: "other"}, Body: "please look"},
+	}
+
+	var capturedQuery string
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "search/issues" {
+				// Find the query parameter
+				for j, arg := range args {
+					if arg == "-f" && j+1 < len(args) && strings.HasPrefix(args[j+1], "q=") {
+						capturedQuery = args[j+1]
+					}
+				}
+				_ = i
+				return json.Marshal(searchResult)
+			}
+			if strings.HasSuffix(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.HasSuffix(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+			if strings.HasSuffix(a, "/timeline") {
+				return json.Marshal(events10)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	var items []format.Item
+	err := gh.NextItems("myorg", "", "me", 30*time.Minute, sinceTime, nil, nil, 5, ScopeOrg, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+
+	// Verify that the search query includes the updated:>= filter
+	expectedDateStr := sinceTime.Format("2006-01-02")
+	expectedFragment := "updated:>=" + expectedDateStr
+	if !strings.Contains(capturedQuery, expectedFragment) {
+		t.Errorf("expected query to contain %q, got %q", expectedFragment, capturedQuery)
 	}
 }

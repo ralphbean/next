@@ -10,10 +10,10 @@ import (
 	"github.com/ralphbean/next/format"
 )
 
-func glCollect(t *testing.T, gl Backend, owner, repo, user string, since time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
+func glCollect(t *testing.T, gl Backend, owner, repo, user string, cooldown time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
 	t.Helper()
 	var items []format.Item
-	err := gl.NextItems(owner, repo, user, since, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
+	err := gl.NextItems(owner, repo, user, cooldown, time.Time{}, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -326,7 +326,7 @@ func TestGitLabNextItemsOrgScope(t *testing.T) {
 
 	gl := NewGitLab(runner, "")
 	var items []format.Item
-	err := gl.NextItems("mygroup", "", "me", 30*time.Minute, nil, nil, 5, ScopeOrg, func(item format.Item) {
+	err := gl.NextItems("mygroup", "", "me", 30*time.Minute, time.Time{}, nil, nil, 5, ScopeOrg, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {

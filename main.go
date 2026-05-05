@@ -177,7 +177,7 @@ func run() error {
 		fmt.Print("\033[0m")
 	}
 
-	err = b.NextItems(info.Owner, info.Name, user, since, ignore, ignoreUsers, *limit, scope, emit)
+	err = b.NextItems(info.Owner, info.Name, user, since, time.Time{}, ignore, ignoreUsers, *limit, scope, emit)
 	if err != nil {
 		return err
 	}

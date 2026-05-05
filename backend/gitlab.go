@@ -98,7 +98,7 @@ func (g *gitLab) CurrentUser() (string, error) {
 	return u.Username, nil
 }
 
-func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error {
+func (g *gitLab) NextItems(owner, repo, user string, cooldown time.Duration, since time.Time, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error {
 	// Fetch issues and MRs in parallel
 	var issues []glIssue
 	var mrs []glMR
@@ -165,7 +165,7 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
 
-	cutoff := time.Now().Add(-since)
+	cutoff := time.Now().Add(-cooldown)
 
 	type candidate struct {
 		item      format.Item

@@ -142,13 +142,13 @@ func (g *gitHub) CurrentUser() (string, error) {
 	return u.Login, nil
 }
 
-func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error {
+func (g *gitHub) NextItems(owner, repo, user string, cooldown time.Duration, since time.Time, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error {
 	var issues []ghIssue
 	var err error
 	if scope == ScopeOrg {
-		issues, err = g.searchOrgIssues(owner)
+		issues, err = g.searchOrgIssues(owner, since)
 	} else {
-		issues, err = g.listRepoIssues(owner, repo)
+		issues, err = g.listRepoIssues(owner, repo, since)
 	}
 	if err != nil {
 		return err
@@ -159,7 +159,7 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 		return issues[i].UpdatedAt.After(issues[j].UpdatedAt)
 	})
 
-	cutoff := time.Now().Add(-since)
+	cutoff := time.Now().Add(-cooldown)
 
 	type candidate struct {
 		item      format.Item
@@ -396,16 +396,20 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 	return nil
 }
 
-func (g *gitHub) listRepoIssues(owner, repo string) ([]ghIssue, error) {
+func (g *gitHub) listRepoIssues(owner, repo string, since time.Time) ([]ghIssue, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
-	out, err := g.runAPI("gh", "api", endpoint,
+	args := []string{"api", endpoint,
 		"--paginate",
 		"--method", "GET",
 		"-f", "state=open",
 		"-f", "sort=updated",
 		"-f", "direction=desc",
 		"-f", "per_page=100",
-	)
+	}
+	if !since.IsZero() {
+		args = append(args, "-f", "since="+since.Format(time.RFC3339))
+	}
+	out, err := g.runAPI("gh", args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list issues: %w", err)
 	}
@@ -416,8 +420,11 @@ func (g *gitHub) listRepoIssues(owner, repo string) ([]ghIssue, error) {
 	return issues, nil
 }
 
-func (g *gitHub) searchOrgIssues(org string) ([]ghIssue, error) {
+func (g *gitHub) searchOrgIssues(org string, since time.Time) ([]ghIssue, error) {
 	query := fmt.Sprintf("org:%s is:open", org)
+	if !since.IsZero() {
+		query += " updated:>=" + since.Format("2006-01-02")
+	}
 	out, err := g.runAPI("gh", "api", "search/issues",
 		"--method", "GET",
 		"-f", "q="+query,
