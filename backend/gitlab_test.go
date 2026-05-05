@@ -457,6 +457,45 @@ func TestGitLabTierAuthoredBeforeGeneral(t *testing.T) {
 	}
 }
 
+func TestGitLabSincePassedToAPI(t *testing.T) {
+	now := time.Now()
+	since := now.Add(-7 * 24 * time.Hour) // 7 days ago
+
+	var capturedEndpoints []string
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if a == "user" {
+				return []byte(`{"username":"me"}`), nil
+			}
+			if strings.Contains(a, "issues?") || strings.Contains(a, "merge_requests?") {
+				capturedEndpoints = append(capturedEndpoints, a)
+				if strings.Contains(a, "issues?") {
+					return json.Marshal([]glIssue{})
+				}
+				return json.Marshal([]glMR{})
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	err := gl.NextItems("o", "r", "me", 30*time.Minute, since, nil, nil, 5, ScopeRepo, func(item format.Item) {})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+
+	expected := "updated_after=" + since.Format(time.RFC3339)
+	if len(capturedEndpoints) != 2 {
+		t.Fatalf("expected 2 captured endpoints, got %d", len(capturedEndpoints))
+	}
+	for _, ep := range capturedEndpoints {
+		if !strings.Contains(ep, expected) {
+			t.Errorf("endpoint %q does not contain %q", ep, expected)
+		}
+	}
+}
+
 func TestGitLabTierOrdering(t *testing.T) {
 	now := time.Now()
 
