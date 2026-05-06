@@ -343,7 +343,7 @@ func (g *gitHub) NextItems(owner, repo, user string, since time.Duration, ignore
 			// from others, skip — there's nothing new for the user to act on.
 			// If no one else has touched it, the user hasn't interacted, and
 			// it was filed by someone else, include a synthetic "opened" event.
-			if othersHaveActivity || !lastUserTime.IsZero() || issue.User.Login == user || ignoreUsers.Match(issue.User.Login) {
+			if othersHaveActivity || !lastUserTime.IsZero() || issue.User.Login == user {
 				fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (no new activity)\033[0m\n", kind, label, title)
 				continue
 			}

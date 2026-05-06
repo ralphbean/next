@@ -258,7 +258,7 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 		}
 
 		if len(fmtEvents) == 0 {
-			if othersHaveActivity || !lastUserTime.IsZero() || item.Author == user || ignoreUsers.Match(item.Author) {
+			if othersHaveActivity || !lastUserTime.IsZero() || item.Author == user {
 				fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (no new activity)\033[0m\n", kind, label, title)
 				continue
 			}
