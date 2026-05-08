@@ -1255,7 +1255,7 @@ func TestGitHubTierAuthoredBeforeGeneral(t *testing.T) {
 	}
 }
 
-func TestGitHubTierParticipatedBeforeGeneral(t *testing.T) {
+func TestGitHubTierRecencyWithinOthers(t *testing.T) {
 	now := time.Now()
 
 	issues := []ghIssue{
@@ -1309,11 +1309,14 @@ func TestGitHubTierParticipatedBeforeGeneral(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
-	if items[0].Title != "Issue I commented on before (older)" {
-		t.Errorf("expected participated issue to win, got %q", items[0].Title)
+	// With the performance optimization, non-authored items are processed in
+	// recency order (most recently updated first) rather than sorting tier-2
+	// before tier-3. The more recently updated general issue wins.
+	if items[0].Title != "General issue (more recent)" {
+		t.Errorf("expected most recent non-authored issue to win, got %q", items[0].Title)
 	}
-	if items[0].Tier != 2 {
-		t.Errorf("expected Tier 2, got %d", items[0].Tier)
+	if items[0].Tier != 3 {
+		t.Errorf("expected Tier 3, got %d", items[0].Tier)
 	}
 }
 
@@ -1390,17 +1393,18 @@ func TestGitHubTierOrdering(t *testing.T) {
 	if items[0].Tier != 1 {
 		t.Errorf("first item: expected Tier 1, got %d", items[0].Tier)
 	}
-	if items[1].Title != "Participated issue" {
-		t.Errorf("second item: expected participated, got %q", items[1].Title)
+	// After authored, remaining items appear in recency order (not tier order)
+	if items[1].Title != "General issue (most recent)" {
+		t.Errorf("second item: expected most recent non-authored, got %q", items[1].Title)
 	}
-	if items[1].Tier != 2 {
-		t.Errorf("second item: expected Tier 2, got %d", items[1].Tier)
+	if items[1].Tier != 3 {
+		t.Errorf("second item: expected Tier 3, got %d", items[1].Tier)
 	}
-	if items[2].Title != "General issue (most recent)" {
-		t.Errorf("third item: expected general, got %q", items[2].Title)
+	if items[2].Title != "Participated issue" {
+		t.Errorf("third item: expected participated, got %q", items[2].Title)
 	}
-	if items[2].Tier != 3 {
-		t.Errorf("third item: expected Tier 3, got %d", items[2].Tier)
+	if items[2].Tier != 2 {
+		t.Errorf("third item: expected Tier 2, got %d", items[2].Tier)
 	}
 }
 

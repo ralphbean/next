@@ -167,14 +167,22 @@ func (g *gitLab) NextItems(owner, repo, user string, cooldown time.Duration, sin
 
 	cutoff := time.Now().Add(-cooldown)
 
-	type candidate struct {
-		item      format.Item
-		tier      int
-		updatedAt time.Time
-	}
-	var candidates []candidate
-
+	// Split by authorship for tier-aware ordering without processing all items.
+	var authoredItems, otherItems []glItem
 	for _, item := range items {
+		if item.Author == user {
+			authoredItems = append(authoredItems, item)
+		} else {
+			otherItems = append(otherItems, item)
+		}
+	}
+	orderedItems := append(authoredItems, otherItems...)
+
+	found := 0
+	for _, item := range orderedItems {
+		if found >= limit {
+			break
+		}
 		notes, err := g.getNotes(item.ProjectRef, item.Kind, item.IID)
 		if err != nil {
 			return err
@@ -282,30 +290,13 @@ func (g *gitLab) NextItems(owner, repo, user string, cooldown time.Duration, sin
 			tier = 2
 		}
 
-		candidates = append(candidates, candidate{
-			item: format.Item{
-				URL:    item.WebURL,
-				Title:  item.Title,
-				Events: fmtEvents,
-				Tier:   tier,
-			},
-			tier:      tier,
-			updatedAt: item.UpdatedAt,
+		emit(format.Item{
+			URL:    item.WebURL,
+			Title:  item.Title,
+			Events: fmtEvents,
+			Tier:   tier,
 		})
-	}
-
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].tier != candidates[j].tier {
-			return candidates[i].tier < candidates[j].tier
-		}
-		return candidates[i].updatedAt.After(candidates[j].updatedAt)
-	})
-
-	for i, c := range candidates {
-		if i >= limit {
-			break
-		}
-		emit(c.item)
+		found++
 	}
 
 	return nil

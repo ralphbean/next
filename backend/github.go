@@ -161,14 +161,26 @@ func (g *gitHub) NextItems(owner, repo, user string, cooldown time.Duration, sin
 
 	cutoff := time.Now().Add(-cooldown)
 
-	type candidate struct {
-		item      format.Item
-		tier      int
-		updatedAt time.Time
-	}
-	var candidates []candidate
-
+	// Split by authorship for tier-aware ordering without processing all items.
+	// Authored issues (tier 1) are always highest priority and can be identified
+	// without any API calls since authorship is in the issue list response.
+	var authoredIssues, otherIssues []ghIssue
 	for _, issue := range issues {
+		if issue.User.Login == user {
+			authoredIssues = append(authoredIssues, issue)
+		} else {
+			otherIssues = append(otherIssues, issue)
+		}
+	}
+	// Process authored first so tier-1 items are emitted before tier-2/3.
+	// Both slices preserve the recency ordering from the sort above.
+	orderedIssues := append(authoredIssues, otherIssues...)
+
+	found := 0
+	for _, issue := range orderedIssues {
+		if found >= limit {
+			break
+		}
 		// For org scope, extract owner/repo per issue from its URL
 		issueOwner, issueRepo := owner, repo
 		if scope == ScopeOrg {
@@ -367,30 +379,13 @@ func (g *gitHub) NextItems(owner, repo, user string, cooldown time.Duration, sin
 			tier = 2
 		}
 
-		candidates = append(candidates, candidate{
-			item: format.Item{
-				URL:    issue.HTMLURL,
-				Title:  issue.Title,
-				Events: fmtEvents,
-				Tier:   tier,
-			},
-			tier:      tier,
-			updatedAt: issue.UpdatedAt,
+		emit(format.Item{
+			URL:    issue.HTMLURL,
+			Title:  issue.Title,
+			Events: fmtEvents,
+			Tier:   tier,
 		})
-	}
-
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].tier != candidates[j].tier {
-			return candidates[i].tier < candidates[j].tier
-		}
-		return candidates[i].updatedAt.After(candidates[j].updatedAt)
-	})
-
-	for i, c := range candidates {
-		if i >= limit {
-			break
-		}
-		emit(c.item)
+		found++
 	}
 
 	return nil

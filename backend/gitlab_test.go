@@ -566,16 +566,17 @@ func TestGitLabTierOrdering(t *testing.T) {
 	if items[0].Tier != 1 {
 		t.Errorf("first item: expected Tier 1, got %d", items[0].Tier)
 	}
-	if items[1].Title != "Participated issue" {
-		t.Errorf("second item: expected participated, got %q", items[1].Title)
+	// After authored, remaining items appear in recency order (not tier order)
+	if items[1].Title != "General issue (most recent)" {
+		t.Errorf("second item: expected most recent non-authored, got %q", items[1].Title)
 	}
-	if items[1].Tier != 2 {
-		t.Errorf("second item: expected Tier 2, got %d", items[1].Tier)
+	if items[1].Tier != 3 {
+		t.Errorf("second item: expected Tier 3, got %d", items[1].Tier)
 	}
-	if items[2].Title != "General issue (most recent)" {
-		t.Errorf("third item: expected general, got %q", items[2].Title)
+	if items[2].Title != "Participated issue" {
+		t.Errorf("third item: expected participated, got %q", items[2].Title)
 	}
-	if items[2].Tier != 3 {
-		t.Errorf("third item: expected Tier 3, got %d", items[2].Tier)
+	if items[2].Tier != 2 {
+		t.Errorf("third item: expected Tier 2, got %d", items[2].Tier)
 	}
 }
