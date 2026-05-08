@@ -98,7 +98,7 @@ func (g *gitLab) CurrentUser() (string, error) {
 	return u.Username, nil
 }
 
-func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error {
+func (g *gitLab) NextItems(owner, repo, user string, cooldown time.Duration, since time.Time, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error {
 	// Fetch issues and MRs in parallel
 	var issues []glIssue
 	var mrs []glMR
@@ -109,21 +109,21 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 		groupPath := url.PathEscape(owner)
 		go func() {
 			defer listWg.Done()
-			issues, issErr = g.listGroupIssues(groupPath)
+			issues, issErr = g.listGroupIssues(groupPath, since)
 		}()
 		go func() {
 			defer listWg.Done()
-			mrs, mrErr = g.listGroupMRs(groupPath)
+			mrs, mrErr = g.listGroupMRs(groupPath, since)
 		}()
 	} else {
 		projectPath := url.PathEscape(owner + "/" + repo)
 		go func() {
 			defer listWg.Done()
-			issues, issErr = g.listIssues(projectPath)
+			issues, issErr = g.listIssues(projectPath, since)
 		}()
 		go func() {
 			defer listWg.Done()
-			mrs, mrErr = g.listMRs(projectPath)
+			mrs, mrErr = g.listMRs(projectPath, since)
 		}()
 	}
 	listWg.Wait()
@@ -165,9 +165,15 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
 
-	cutoff := time.Now().Add(-since)
+	cutoff := time.Now().Add(-cooldown)
 
-	found := 0
+	type candidate struct {
+		item      format.Item
+		tier      int
+		updatedAt time.Time
+	}
+	var candidates []candidate
+
 	for _, item := range items {
 		notes, err := g.getNotes(item.ProjectRef, item.Kind, item.IID)
 		if err != nil {
@@ -269,22 +275,47 @@ func (g *gitLab) NextItems(owner, repo, user string, since time.Duration, ignore
 			})
 		}
 
-		emit(format.Item{
-			URL:    item.WebURL,
-			Title:  item.Title,
-			Events: fmtEvents,
+		tier := 3
+		if item.Author == user {
+			tier = 1
+		} else if !lastUserTime.IsZero() {
+			tier = 2
+		}
+
+		candidates = append(candidates, candidate{
+			item: format.Item{
+				URL:    item.WebURL,
+				Title:  item.Title,
+				Events: fmtEvents,
+				Tier:   tier,
+			},
+			tier:      tier,
+			updatedAt: item.UpdatedAt,
 		})
-		found++
-		if found >= limit {
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].tier != candidates[j].tier {
+			return candidates[i].tier < candidates[j].tier
+		}
+		return candidates[i].updatedAt.After(candidates[j].updatedAt)
+	})
+
+	for i, c := range candidates {
+		if i >= limit {
 			break
 		}
+		emit(c.item)
 	}
 
 	return nil
 }
 
-func (g *gitLab) listIssues(projectPath string) ([]glIssue, error) {
+func (g *gitLab) listIssues(projectPath string, since time.Time) ([]glIssue, error) {
 	endpoint := fmt.Sprintf("projects/%s/issues?state=opened&order_by=updated_at&sort=desc&per_page=100", projectPath)
+	if !since.IsZero() {
+		endpoint += "&updated_after=" + since.Format(time.RFC3339)
+	}
 	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list GitLab issues: %w", err)
@@ -296,8 +327,11 @@ func (g *gitLab) listIssues(projectPath string) ([]glIssue, error) {
 	return issues, nil
 }
 
-func (g *gitLab) listMRs(projectPath string) ([]glMR, error) {
+func (g *gitLab) listMRs(projectPath string, since time.Time) ([]glMR, error) {
 	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=opened&order_by=updated_at&sort=desc&per_page=100", projectPath)
+	if !since.IsZero() {
+		endpoint += "&updated_after=" + since.Format(time.RFC3339)
+	}
 	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list GitLab MRs: %w", err)
@@ -309,8 +343,11 @@ func (g *gitLab) listMRs(projectPath string) ([]glMR, error) {
 	return mrs, nil
 }
 
-func (g *gitLab) listGroupIssues(groupPath string) ([]glIssue, error) {
+func (g *gitLab) listGroupIssues(groupPath string, since time.Time) ([]glIssue, error) {
 	endpoint := fmt.Sprintf("groups/%s/issues?state=opened&order_by=updated_at&sort=desc&per_page=100", groupPath)
+	if !since.IsZero() {
+		endpoint += "&updated_after=" + since.Format(time.RFC3339)
+	}
 	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list group issues: %w", err)
@@ -322,8 +359,11 @@ func (g *gitLab) listGroupIssues(groupPath string) ([]glIssue, error) {
 	return issues, nil
 }
 
-func (g *gitLab) listGroupMRs(groupPath string) ([]glMR, error) {
+func (g *gitLab) listGroupMRs(groupPath string, since time.Time) ([]glMR, error) {
 	endpoint := fmt.Sprintf("groups/%s/merge_requests?state=opened&order_by=updated_at&sort=desc&per_page=100", groupPath)
+	if !since.IsZero() {
+		endpoint += "&updated_after=" + since.Format(time.RFC3339)
+	}
 	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list group MRs: %w", err)

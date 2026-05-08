@@ -17,7 +17,7 @@ import (
 	"golang.org/x/term"
 )
 
-func parseSince(s string) (time.Duration, error) {
+func parseDuration(s string) (time.Duration, error) {
 	return duration.Parse(s)
 }
 
@@ -68,7 +68,8 @@ func openBrowser(url string) error {
 }
 
 func run() error {
-	sinceStr := flag.String("since", "30m", "cooldown before showing items you recently touched (e.g., 30m, 1h, 3d)")
+	cooldownStr := flag.String("cooldown", "30m", "cooldown before showing items you recently touched (e.g., 30m, 1h, 3d)")
+	sinceStr := flag.String("since", "24h", "only fetch items updated within this window (e.g., 1h, 3d, 7d)")
 	ignoreStr := flag.String("ignore-events", "labeled,unlabeled,mentioned,subscribed,assigned,unassigned,referenced,cross-referenced,head_ref_force_pushed,convert_to_draft,renamed,project_v2_item_status_changed,added_to_project_v2,parent_issue_added,blocked_by_added,blocking_added,marked_as_duplicate", "comma-separated list of event patterns to ignore (supports * wildcards)")
 	ignoreUsersStr := flag.String("ignore-users", "*[bot]", "comma-separated list of user patterns to ignore (supports * wildcards)")
 	limit := flag.Int("limit", 1, "maximum number of items to show")
@@ -101,10 +102,16 @@ func run() error {
 		return config.InteractiveConfig(defaultRunner, prompter, cfgPath)
 	}
 
-	since, err := parseSince(*sinceStr)
+	cooldown, err := parseDuration(*cooldownStr)
+	if err != nil {
+		return fmt.Errorf("invalid --cooldown value: %w", err)
+	}
+
+	sinceDuration, err := parseDuration(*sinceStr)
 	if err != nil {
 		return fmt.Errorf("invalid --since value: %w", err)
 	}
+	sinceTime := time.Now().Add(-sinceDuration)
 
 	if *limit < 1 {
 		return fmt.Errorf("invalid --limit value: must be at least 1")
@@ -165,7 +172,11 @@ func run() error {
 		if emitted > 1 {
 			fmt.Printf("  %s\n", separator)
 		}
-		fmt.Printf("\033[1m▶ %s\n", item.URL)
+		if label := format.TierLabel(item.Tier); label != "" {
+			fmt.Printf("\033[1m▶ %s %s\n", label, item.URL)
+		} else {
+			fmt.Printf("\033[1m▶ %s\n", item.URL)
+		}
 		fmt.Printf("  %s\n", item.Title)
 		for _, e := range item.Events {
 			fmt.Printf("    %s\n", format.FormatEvent(e, width-4))
@@ -173,7 +184,7 @@ func run() error {
 		fmt.Print("\033[0m")
 	}
 
-	err = b.NextItems(info.Owner, info.Name, user, since, ignore, ignoreUsers, *limit, scope, emit)
+	err = b.NextItems(info.Owner, info.Name, user, cooldown, sinceTime, ignore, ignoreUsers, *limit, scope, emit)
 	if err != nil {
 		return err
 	}

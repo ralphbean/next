@@ -10,10 +10,10 @@ import (
 	"github.com/ralphbean/next/format"
 )
 
-func glCollect(t *testing.T, gl Backend, owner, repo, user string, since time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
+func glCollect(t *testing.T, gl Backend, owner, repo, user string, cooldown time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
 	t.Helper()
 	var items []format.Item
-	err := gl.NextItems(owner, repo, user, since, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
+	err := gl.NextItems(owner, repo, user, cooldown, time.Time{}, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -326,7 +326,7 @@ func TestGitLabNextItemsOrgScope(t *testing.T) {
 
 	gl := NewGitLab(runner, "")
 	var items []format.Item
-	err := gl.NextItems("mygroup", "", "me", 30*time.Minute, nil, nil, 5, ScopeOrg, func(item format.Item) {
+	err := gl.NextItems("mygroup", "", "me", 30*time.Minute, time.Time{}, nil, nil, 5, ScopeOrg, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -396,5 +396,186 @@ func TestGitLabNextItemsApprovalNote(t *testing.T) {
 	}
 	if items[0].Events[0].Author != "reviewer" {
 		t.Errorf("expected author 'reviewer', got %q", items[0].Events[0].Author)
+	}
+}
+
+func TestGitLabTierAuthoredBeforeGeneral(t *testing.T) {
+	now := time.Now()
+
+	issues := []glIssue{
+		{
+			IID:       1,
+			Title:     "General issue (more recent)",
+			WebURL:    "https://gitlab.com/o/r/-/issues/1",
+			UpdatedAt: now.Add(-5 * time.Minute),
+			Author:    glNoteAuthor{Username: "stranger"},
+		},
+		{
+			IID:       2,
+			Title:     "My authored issue (older)",
+			WebURL:    "https://gitlab.com/o/r/-/issues/2",
+			UpdatedAt: now.Add(-20 * time.Minute),
+			Author:    glNoteAuthor{Username: "me"},
+		},
+	}
+
+	notes1 := []glNote{
+		{Body: "hello", CreatedAt: now.Add(-5 * time.Minute), Author: glNoteAuthor{Username: "stranger"}},
+	}
+	notes2 := []glNote{
+		{Body: "comment on my issue", CreatedAt: now.Add(-20 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.HasPrefix(a, "projects/o%2Fr/merge_requests?") {
+				return json.Marshal([]glMR{})
+			}
+			if a == "projects/o%2Fr/issues/1/notes" {
+				return json.Marshal(notes1)
+			}
+			if a == "projects/o%2Fr/issues/2/notes" {
+				return json.Marshal(notes2)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	items := glCollect(t, gl, "o", "r", "me", 30*time.Minute, nil, nil, 1)
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
+	}
+	if items[0].Title != "My authored issue (older)" {
+		t.Errorf("expected authored issue to win, got %q", items[0].Title)
+	}
+	if items[0].Tier != 1 {
+		t.Errorf("expected Tier 1, got %d", items[0].Tier)
+	}
+}
+
+func TestGitLabSincePassedToAPI(t *testing.T) {
+	now := time.Now()
+	since := now.Add(-7 * 24 * time.Hour) // 7 days ago
+
+	var capturedEndpoints []string
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if a == "user" {
+				return []byte(`{"username":"me"}`), nil
+			}
+			if strings.Contains(a, "issues?") || strings.Contains(a, "merge_requests?") {
+				capturedEndpoints = append(capturedEndpoints, a)
+				if strings.Contains(a, "issues?") {
+					return json.Marshal([]glIssue{})
+				}
+				return json.Marshal([]glMR{})
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	err := gl.NextItems("o", "r", "me", 30*time.Minute, since, nil, nil, 5, ScopeRepo, func(item format.Item) {})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+
+	expected := "updated_after=" + since.Format(time.RFC3339)
+	if len(capturedEndpoints) != 2 {
+		t.Fatalf("expected 2 captured endpoints, got %d", len(capturedEndpoints))
+	}
+	for _, ep := range capturedEndpoints {
+		if !strings.Contains(ep, expected) {
+			t.Errorf("endpoint %q does not contain %q", ep, expected)
+		}
+	}
+}
+
+func TestGitLabTierOrdering(t *testing.T) {
+	now := time.Now()
+
+	issues := []glIssue{
+		{
+			IID:       1,
+			Title:     "General issue (most recent)",
+			WebURL:    "https://gitlab.com/o/r/-/issues/1",
+			UpdatedAt: now.Add(-5 * time.Minute),
+			Author:    glNoteAuthor{Username: "stranger"},
+		},
+		{
+			IID:       2,
+			Title:     "Participated issue",
+			WebURL:    "https://gitlab.com/o/r/-/issues/2",
+			UpdatedAt: now.Add(-15 * time.Minute),
+			Author:    glNoteAuthor{Username: "other"},
+		},
+		{
+			IID:       3,
+			Title:     "Authored issue (oldest)",
+			WebURL:    "https://gitlab.com/o/r/-/issues/3",
+			UpdatedAt: now.Add(-25 * time.Minute),
+			Author:    glNoteAuthor{Username: "me"},
+		},
+	}
+
+	notes1 := []glNote{
+		{Body: "hello", CreatedAt: now.Add(-5 * time.Minute), Author: glNoteAuthor{Username: "stranger"}},
+	}
+	notes2 := []glNote{
+		{Body: "my old comment", CreatedAt: now.Add(-2 * time.Hour), Author: glNoteAuthor{Username: "me"}},
+		{Body: "reply", CreatedAt: now.Add(-15 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+	}
+	notes3 := []glNote{
+		{Body: "comment on my issue", CreatedAt: now.Add(-25 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.HasPrefix(a, "projects/o%2Fr/merge_requests?") {
+				return json.Marshal([]glMR{})
+			}
+			if a == "projects/o%2Fr/issues/1/notes" {
+				return json.Marshal(notes1)
+			}
+			if a == "projects/o%2Fr/issues/2/notes" {
+				return json.Marshal(notes2)
+			}
+			if a == "projects/o%2Fr/issues/3/notes" {
+				return json.Marshal(notes3)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	items := glCollect(t, gl, "o", "r", "me", 30*time.Minute, nil, nil, 5)
+	if len(items) != 3 {
+		t.Fatalf("NextItems() returned %d items, want 3", len(items))
+	}
+	if items[0].Title != "Authored issue (oldest)" {
+		t.Errorf("first item: expected authored, got %q", items[0].Title)
+	}
+	if items[0].Tier != 1 {
+		t.Errorf("first item: expected Tier 1, got %d", items[0].Tier)
+	}
+	if items[1].Title != "Participated issue" {
+		t.Errorf("second item: expected participated, got %q", items[1].Title)
+	}
+	if items[1].Tier != 2 {
+		t.Errorf("second item: expected Tier 2, got %d", items[1].Tier)
+	}
+	if items[2].Title != "General issue (most recent)" {
+		t.Errorf("third item: expected general, got %q", items[2].Title)
+	}
+	if items[2].Tier != 3 {
+		t.Errorf("third item: expected Tier 3, got %d", items[2].Tier)
 	}
 }

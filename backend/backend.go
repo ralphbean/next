@@ -55,5 +55,5 @@ const (
 // Backend fetches issues/PRs from a hosting platform.
 type Backend interface {
 	CurrentUser() (string, error)
-	NextItems(owner, repo, user string, since time.Duration, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error
+	NextItems(owner, repo, user string, cooldown time.Duration, since time.Time, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error
 }
