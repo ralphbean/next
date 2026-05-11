@@ -142,7 +142,7 @@ func (g *gitHub) CurrentUser() (string, error) {
 	return u.Login, nil
 }
 
-func (g *gitHub) NextItems(owner, repo, user string, cooldown time.Duration, since time.Time, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error {
+func (g *gitHub) NextItems(owner, repo, user string, cooldown time.Duration, since time.Time, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, maxEvents int, scope Scope, emit func(format.Item)) error {
 	var issues []ghIssue
 	var err error
 	if scope == ScopeOrg {

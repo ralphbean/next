@@ -14,7 +14,7 @@ import (
 func ghCollect(t *testing.T, gh Backend, owner, repo, user string, cooldown time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
 	t.Helper()
 	var items []format.Item
-	err := gh.NextItems(owner, repo, user, cooldown, time.Time{}, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
+	err := gh.NextItems(owner, repo, user, cooldown, time.Time{}, ignoreEvents, ignoreUsers, limit, 0, ScopeRepo, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -1128,7 +1128,7 @@ func TestGitHubNextItemsOrgScope(t *testing.T) {
 
 	gh := NewGitHub(runner)
 	var items []format.Item
-	err := gh.NextItems("myorg", "", "me", 30*time.Minute, time.Time{}, nil, nil, 2, ScopeOrg, func(item format.Item) {
+	err := gh.NextItems("myorg", "", "me", 30*time.Minute, time.Time{}, nil, nil, 2, 0, ScopeOrg, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -1449,7 +1449,7 @@ func TestGitHubSincePassedToAPI(t *testing.T) {
 
 	gh := NewGitHub(runner)
 	var items []format.Item
-	err := gh.NextItems("o", "r", "me", 30*time.Minute, sinceTime, nil, nil, 5, ScopeRepo, func(item format.Item) {
+	err := gh.NextItems("o", "r", "me", 30*time.Minute, sinceTime, nil, nil, 5, 0, ScopeRepo, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -1519,7 +1519,7 @@ func TestGitHubSincePassedToOrgSearch(t *testing.T) {
 
 	gh := NewGitHub(runner)
 	var items []format.Item
-	err := gh.NextItems("myorg", "", "me", 30*time.Minute, sinceTime, nil, nil, 5, ScopeOrg, func(item format.Item) {
+	err := gh.NextItems("myorg", "", "me", 30*time.Minute, sinceTime, nil, nil, 5, 0, ScopeOrg, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {

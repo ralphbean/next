@@ -13,7 +13,7 @@ import (
 func glCollect(t *testing.T, gl Backend, owner, repo, user string, cooldown time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
 	t.Helper()
 	var items []format.Item
-	err := gl.NextItems(owner, repo, user, cooldown, time.Time{}, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
+	err := gl.NextItems(owner, repo, user, cooldown, time.Time{}, ignoreEvents, ignoreUsers, limit, 0, ScopeRepo, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -326,7 +326,7 @@ func TestGitLabNextItemsOrgScope(t *testing.T) {
 
 	gl := NewGitLab(runner, "")
 	var items []format.Item
-	err := gl.NextItems("mygroup", "", "me", 30*time.Minute, time.Time{}, nil, nil, 5, ScopeOrg, func(item format.Item) {
+	err := gl.NextItems("mygroup", "", "me", 30*time.Minute, time.Time{}, nil, nil, 5, 0, ScopeOrg, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -480,7 +480,7 @@ func TestGitLabSincePassedToAPI(t *testing.T) {
 	}
 
 	gl := NewGitLab(runner, "")
-	err := gl.NextItems("o", "r", "me", 30*time.Minute, since, nil, nil, 5, ScopeRepo, func(item format.Item) {})
+	err := gl.NextItems("o", "r", "me", 30*time.Minute, since, nil, nil, 5, 0, ScopeRepo, func(item format.Item) {})
 	if err != nil {
 		t.Fatalf("NextItems() error: %v", err)
 	}
