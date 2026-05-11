@@ -14,7 +14,7 @@ import (
 func ghCollect(t *testing.T, gh Backend, owner, repo, user string, cooldown time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
 	t.Helper()
 	var items []format.Item
-	err := gh.NextItems(owner, repo, user, cooldown, time.Time{}, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
+	err := gh.NextItems(owner, repo, user, cooldown, time.Time{}, ignoreEvents, ignoreUsers, limit, 0, ScopeRepo, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -1128,7 +1128,7 @@ func TestGitHubNextItemsOrgScope(t *testing.T) {
 
 	gh := NewGitHub(runner)
 	var items []format.Item
-	err := gh.NextItems("myorg", "", "me", 30*time.Minute, time.Time{}, nil, nil, 2, ScopeOrg, func(item format.Item) {
+	err := gh.NextItems("myorg", "", "me", 30*time.Minute, time.Time{}, nil, nil, 2, 0, ScopeOrg, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -1255,7 +1255,7 @@ func TestGitHubTierAuthoredBeforeGeneral(t *testing.T) {
 	}
 }
 
-func TestGitHubTierParticipatedBeforeGeneral(t *testing.T) {
+func TestGitHubTierRecencyWithinOthers(t *testing.T) {
 	now := time.Now()
 
 	issues := []ghIssue{
@@ -1309,11 +1309,14 @@ func TestGitHubTierParticipatedBeforeGeneral(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
-	if items[0].Title != "Issue I commented on before (older)" {
-		t.Errorf("expected participated issue to win, got %q", items[0].Title)
+	// With the performance optimization, non-authored items are processed in
+	// recency order (most recently updated first) rather than sorting tier-2
+	// before tier-3. The more recently updated general issue wins.
+	if items[0].Title != "General issue (more recent)" {
+		t.Errorf("expected most recent non-authored issue to win, got %q", items[0].Title)
 	}
-	if items[0].Tier != 2 {
-		t.Errorf("expected Tier 2, got %d", items[0].Tier)
+	if items[0].Tier != 3 {
+		t.Errorf("expected Tier 3, got %d", items[0].Tier)
 	}
 }
 
@@ -1390,17 +1393,18 @@ func TestGitHubTierOrdering(t *testing.T) {
 	if items[0].Tier != 1 {
 		t.Errorf("first item: expected Tier 1, got %d", items[0].Tier)
 	}
-	if items[1].Title != "Participated issue" {
-		t.Errorf("second item: expected participated, got %q", items[1].Title)
+	// After authored, remaining items appear in recency order (not tier order)
+	if items[1].Title != "General issue (most recent)" {
+		t.Errorf("second item: expected most recent non-authored, got %q", items[1].Title)
 	}
-	if items[1].Tier != 2 {
-		t.Errorf("second item: expected Tier 2, got %d", items[1].Tier)
+	if items[1].Tier != 3 {
+		t.Errorf("second item: expected Tier 3, got %d", items[1].Tier)
 	}
-	if items[2].Title != "General issue (most recent)" {
-		t.Errorf("third item: expected general, got %q", items[2].Title)
+	if items[2].Title != "Participated issue" {
+		t.Errorf("third item: expected participated, got %q", items[2].Title)
 	}
-	if items[2].Tier != 3 {
-		t.Errorf("third item: expected Tier 3, got %d", items[2].Tier)
+	if items[2].Tier != 2 {
+		t.Errorf("third item: expected Tier 2, got %d", items[2].Tier)
 	}
 }
 
@@ -1445,7 +1449,7 @@ func TestGitHubSincePassedToAPI(t *testing.T) {
 
 	gh := NewGitHub(runner)
 	var items []format.Item
-	err := gh.NextItems("o", "r", "me", 30*time.Minute, sinceTime, nil, nil, 5, ScopeRepo, func(item format.Item) {
+	err := gh.NextItems("o", "r", "me", 30*time.Minute, sinceTime, nil, nil, 5, 0, ScopeRepo, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -1515,7 +1519,7 @@ func TestGitHubSincePassedToOrgSearch(t *testing.T) {
 
 	gh := NewGitHub(runner)
 	var items []format.Item
-	err := gh.NextItems("myorg", "", "me", 30*time.Minute, sinceTime, nil, nil, 5, ScopeOrg, func(item format.Item) {
+	err := gh.NextItems("myorg", "", "me", 30*time.Minute, sinceTime, nil, nil, 5, 0, ScopeOrg, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -1527,5 +1531,193 @@ func TestGitHubSincePassedToOrgSearch(t *testing.T) {
 	expectedFragment := "updated:>=" + expectedDateStr
 	if !strings.Contains(capturedQuery, expectedFragment) {
 		t.Errorf("expected query to contain %q, got %q", expectedFragment, capturedQuery)
+	}
+}
+
+func TestGitHubParallelFetching(t *testing.T) {
+	now := time.Now()
+
+	var issues []ghIssue
+	for i := 1; i <= 10; i++ {
+		issues = append(issues, ghIssue{
+			Number:    i,
+			Title:     fmt.Sprintf("Issue %d", i),
+			HTMLURL:   fmt.Sprintf("https://github.com/o/r/issues/%d", i),
+			UpdatedAt: now.Add(-time.Duration(i) * time.Minute),
+			User:      ghActor{Login: "other"},
+		})
+	}
+
+	var concurrentPeak atomic.Int32
+	var current atomic.Int32
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if strings.HasSuffix(a, "/timeline") {
+				n := current.Add(1)
+				for {
+					peak := concurrentPeak.Load()
+					if n <= peak {
+						break
+					}
+					if concurrentPeak.CompareAndSwap(peak, n) {
+						break
+					}
+				}
+				time.Sleep(10 * time.Millisecond)
+				current.Add(-1)
+				issueNum := 0
+				for _, arg := range args {
+					if strings.Contains(arg, "/timeline") {
+						fmt.Sscanf(arg, "repos/o/r/issues/%d/timeline", &issueNum)
+					}
+				}
+				return json.Marshal([]ghTimelineEvent{
+					{Event: "commented", CreatedAt: now.Add(-time.Duration(issueNum) * time.Minute), Actor: ghActor{Login: "other"}, Body: "comment"},
+				})
+			}
+			if strings.HasSuffix(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.HasSuffix(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	var items []format.Item
+	err := gh.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 10, 0, ScopeRepo, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 10 {
+		t.Fatalf("expected 10 items, got %d", len(items))
+	}
+	if items[0].Title != "Issue 1" {
+		t.Errorf("first item should be Issue 1, got %q", items[0].Title)
+	}
+	if items[9].Title != "Issue 10" {
+		t.Errorf("last item should be Issue 10, got %q", items[9].Title)
+	}
+	if peak := concurrentPeak.Load(); peak <= 1 {
+		t.Errorf("expected concurrent execution (peak > 1), got peak=%d", peak)
+	}
+}
+
+func TestGitHubDefaultMaxEvents(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    1,
+			Title:     "Recent issue",
+			HTMLURL:   "https://github.com/o/r/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+			User:      ghActor{Login: "other"},
+		},
+	}
+
+	events := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-10 * time.Minute), Actor: ghActor{Login: "other"}, Body: "please review"},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if strings.Contains(a, "/timeline") {
+				return json.Marshal(events)
+			}
+			if strings.Contains(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.Contains(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	var items []format.Item
+	err := gh.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 1, 100, ScopeRepo, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].Title != "Recent issue" {
+		t.Errorf("expected 'Recent issue', got %q", items[0].Title)
+	}
+}
+
+func TestGitHubMaxEventsLimitsPagination(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    1,
+			Title:     "Issue with events",
+			HTMLURL:   "https://github.com/o/r/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+			User:      ghActor{Login: "other"},
+		},
+	}
+
+	events := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-10 * time.Minute), Actor: ghActor{Login: "other"}, Body: "hello"},
+	}
+
+	var perItemPaginate atomic.Bool
+	runner := func(name string, args ...string) ([]byte, error) {
+		isPerItem := false
+		for _, a := range args {
+			if strings.Contains(a, "/timeline") || strings.Contains(a, "/reactions") ||
+				strings.Contains(a, "/comments") || strings.Contains(a, "/reviews") {
+				isPerItem = true
+			}
+		}
+		if isPerItem {
+			for _, a := range args {
+				if a == "--paginate" {
+					perItemPaginate.Store(true)
+				}
+			}
+		}
+		for _, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if strings.Contains(a, "/timeline") {
+				return json.Marshal(events)
+			}
+			if strings.Contains(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.Contains(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	err := gh.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 5, 50, ScopeRepo, func(item format.Item) {})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if perItemPaginate.Load() {
+		t.Error("per-item API calls should not use --paginate when maxEvents > 0")
 	}
 }
