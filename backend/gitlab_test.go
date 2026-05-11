@@ -636,3 +636,73 @@ func TestGitLabMaxEventsLimitsPagination(t *testing.T) {
 		t.Error("getNotes should not use --paginate when maxEvents > 0")
 	}
 }
+
+func TestGitLabParallelFetching(t *testing.T) {
+	now := time.Now()
+
+	var issues []glIssue
+	for i := 1; i <= 10; i++ {
+		issues = append(issues, glIssue{
+			IID:       i,
+			Title:     fmt.Sprintf("Issue %d", i),
+			WebURL:    fmt.Sprintf("https://gitlab.com/o/r/-/issues/%d", i),
+			UpdatedAt: now.Add(-time.Duration(i) * time.Minute),
+			Author:    glNoteAuthor{Username: "other"},
+		})
+	}
+
+	var concurrentPeak atomic.Int32
+	var current atomic.Int32
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.HasPrefix(a, "projects/o%2Fr/merge_requests?") {
+				return json.Marshal([]glMR{})
+			}
+			if strings.Contains(a, "/notes") {
+				n := current.Add(1)
+				for {
+					peak := concurrentPeak.Load()
+					if n <= peak {
+						break
+					}
+					if concurrentPeak.CompareAndSwap(peak, n) {
+						break
+					}
+				}
+				time.Sleep(10 * time.Millisecond)
+				current.Add(-1)
+				iid := 0
+				fmt.Sscanf(a, "projects/o%%2Fr/issues/%d/notes", &iid)
+				return json.Marshal([]glNote{
+					{Body: "comment", CreatedAt: now.Add(-time.Duration(iid) * time.Minute), Author: glNoteAuthor{Username: "other"}},
+				})
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	var items []format.Item
+	err := gl.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 10, 0, ScopeRepo, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 10 {
+		t.Fatalf("expected 10 items, got %d", len(items))
+	}
+	if items[0].Title != "Issue 1" {
+		t.Errorf("first item should be Issue 1, got %q", items[0].Title)
+	}
+	if items[9].Title != "Issue 10" {
+		t.Errorf("last item should be Issue 10, got %q", items[9].Title)
+	}
+	if peak := concurrentPeak.Load(); peak <= 1 {
+		t.Errorf("expected concurrent execution (peak > 1), got peak=%d", peak)
+	}
+}
