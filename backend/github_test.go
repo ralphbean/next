@@ -1533,3 +1533,63 @@ func TestGitHubSincePassedToOrgSearch(t *testing.T) {
 		t.Errorf("expected query to contain %q, got %q", expectedFragment, capturedQuery)
 	}
 }
+
+func TestGitHubMaxEventsLimitsPagination(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    1,
+			Title:     "Issue with events",
+			HTMLURL:   "https://github.com/o/r/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+			User:      ghActor{Login: "other"},
+		},
+	}
+
+	events := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-10 * time.Minute), Actor: ghActor{Login: "other"}, Body: "hello"},
+	}
+
+	var perItemPaginate atomic.Bool
+	runner := func(name string, args ...string) ([]byte, error) {
+		isPerItem := false
+		for _, a := range args {
+			if strings.HasSuffix(a, "/timeline") || strings.HasSuffix(a, "/reactions") ||
+				strings.HasSuffix(a, "/comments") || strings.HasSuffix(a, "/reviews") {
+				isPerItem = true
+			}
+		}
+		if isPerItem {
+			for _, a := range args {
+				if a == "--paginate" {
+					perItemPaginate.Store(true)
+				}
+			}
+		}
+		for _, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if strings.HasSuffix(a, "/timeline") {
+				return json.Marshal(events)
+			}
+			if strings.HasSuffix(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.HasSuffix(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	err := gh.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 5, 50, ScopeRepo, func(item format.Item) {})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if perItemPaginate.Load() {
+		t.Error("per-item API calls should not use --paginate when maxEvents > 0")
+	}
+}
