@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ralphbean/next/format"
@@ -79,6 +80,18 @@ func NewGitHub(run CmdRunner) Backend {
 
 const maxRetries = 3
 
+func perItemArgs(endpoint string, maxEvents int) []string {
+	if maxEvents > 0 {
+		return []string{"api", fmt.Sprintf("%s?per_page=%d", endpoint, maxEvents)}
+	}
+	return []string{"api", endpoint, "--paginate"}
+}
+
+type ghItemResult struct {
+	item *format.Item
+	err  error
+}
+
 // runAPI wraps g.run with rate-limit retry. When gh api returns a rate
 // limit error, it queries the rate_limit endpoint for the reset time
 // and waits, falling back to exponential backoff if that fails.
@@ -142,7 +155,7 @@ func (g *gitHub) CurrentUser() (string, error) {
 	return u.Login, nil
 }
 
-func (g *gitHub) NextItems(owner, repo, user string, cooldown time.Duration, since time.Time, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error {
+func (g *gitHub) NextItems(owner, repo, user string, cooldown time.Duration, since time.Time, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, maxEvents int, scope Scope, emit func(format.Item)) error {
 	var issues []ghIssue
 	var err error
 	if scope == ScopeOrg {
@@ -177,218 +190,248 @@ func (g *gitHub) NextItems(owner, repo, user string, cooldown time.Duration, sin
 	orderedIssues := append(authoredIssues, otherIssues...)
 
 	found := 0
-	for _, issue := range orderedIssues {
-		if found >= limit {
-			break
+	for batchStart := 0; batchStart < len(orderedIssues) && found < limit; batchStart += maxConcurrency {
+		batchEnd := batchStart + maxConcurrency
+		if batchEnd > len(orderedIssues) {
+			batchEnd = len(orderedIssues)
 		}
-		// For org scope, extract owner/repo per issue from its URL
-		issueOwner, issueRepo := owner, repo
-		if scope == ScopeOrg {
-			issueOwner, issueRepo = parseRepoFromURL(issue.HTMLURL)
-			if issueOwner == "" || issueRepo == "" {
-				continue
-			}
+		batch := orderedIssues[batchStart:batchEnd]
+
+		type indexedIssue struct {
+			idx                       int
+			issue                     ghIssue
+			issueOwner, issueRepo string
 		}
 
-		kind := "issue"
-		if issue.PullRequest != nil {
-			kind = "PR"
-		}
-		label := fmt.Sprintf("#%d", issue.Number)
-		title := issue.Title
-		if r := []rune(title); len(r) > 50 {
-			title = string(r[:50]) + "..."
-		}
-
-		// Fetch details lazily per issue to avoid rate limiting
-		events, err := g.getTimeline(issueOwner, issueRepo, issue.Number)
-		if err != nil {
-			return err
-		}
-		issueReactions, err := g.getReactions(issueOwner, issueRepo, issue.Number)
-		if err != nil {
-			return err
-		}
-		commentReactions, err := g.getCommentReactions(issueOwner, issueRepo, issue.Number)
-		if err != nil {
-			return err
-		}
-		var reviews []ghReview
-		var reviewCommentReactions []ghReaction
-		if issue.PullRequest != nil {
-			reviews, err = g.getReviews(issueOwner, issueRepo, issue.Number)
-			if err != nil {
-				return err
-			}
-			reviewCommentReactions, err = g.getReviewCommentReactions(issueOwner, issueRepo, issue.Number)
-			if err != nil {
-				return err
-			}
-			var reviewReactions []ghReaction
-			reviewReactions, err = g.getReviewReactions(issueOwner, issueRepo, issue.Number)
-			if err != nil {
-				return err
-			}
-			reviewCommentReactions = append(reviewCommentReactions, reviewReactions...)
-		}
-		reactions := append(issueReactions, commentReactions...)
-		reactions = append(reactions, reviewCommentReactions...)
-
-		// Check if user interacted within the since window
-		userTouched := false
-		for _, ev := range events {
-			if ignoreUsers.Match(ev.login()) {
-				continue
-			}
-			if ignoreEvents.Match(ev.Event) {
-				continue
-			}
-			if ev.login() != "" && ev.login() == user && ev.CreatedAt.After(cutoff) {
-				userTouched = true
-				break
-			}
-		}
-		if !userTouched {
-			for _, r := range reviews {
-				if ignoreUsers.Match(r.User.Login) {
+		var valid []indexedIssue
+		for i, issue := range batch {
+			issueOwner, issueRepo := owner, repo
+			if scope == ScopeOrg {
+				issueOwner, issueRepo = parseRepoFromURL(issue.HTMLURL)
+				if issueOwner == "" || issueRepo == "" {
 					continue
 				}
-				if r.User.Login == user && r.SubmittedAt.After(cutoff) {
-					userTouched = true
-					break
-				}
 			}
-		}
-		if !userTouched {
-			for _, r := range reactions {
-				if r.User.Login == user && r.CreatedAt.After(cutoff) {
-					userTouched = true
-					break
-				}
-			}
-		}
-		if userTouched {
-			fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (cooldown)\033[0m\n", kind, label, title)
-			continue
+			valid = append(valid, indexedIssue{idx: i, issue: issue, issueOwner: issueOwner, issueRepo: issueRepo})
 		}
 
-		// Build the item with events since user's last interaction
-		var lastUserTime time.Time
-		for _, ev := range events {
-			if ignoreUsers.Match(ev.login()) {
-				continue
+		results := make([]ghItemResult, len(batch))
+		var wg sync.WaitGroup
+		for _, vi := range valid {
+			wg.Add(1)
+			go func(idx int, iss ghIssue, o, r string) {
+				defer wg.Done()
+				results[idx] = g.processIssue(iss, o, r, user, cutoff, ignoreEvents, ignoreUsers, maxEvents)
+			}(vi.idx, vi.issue, vi.issueOwner, vi.issueRepo)
+		}
+		wg.Wait()
+
+		for _, res := range results {
+			if res.err != nil {
+				return res.err
 			}
-			if ignoreEvents.Match(ev.Event) {
-				continue
-			}
-			if ev.login() == user && ev.CreatedAt.After(lastUserTime) {
-				lastUserTime = ev.CreatedAt
+			if res.item != nil {
+				emit(*res.item)
+				found++
+				if found >= limit {
+					break
+				}
 			}
 		}
+	}
+
+	return nil
+}
+
+func (g *gitHub) processIssue(issue ghIssue, owner, repo, user string, cutoff time.Time, ignoreEvents, ignoreUsers MatchSet, maxEvents int) ghItemResult {
+	kind := "issue"
+	if issue.PullRequest != nil {
+		kind = "PR"
+	}
+	label := fmt.Sprintf("#%d", issue.Number)
+	title := issue.Title
+	if r := []rune(title); len(r) > 50 {
+		title = string(r[:50]) + "..."
+	}
+
+	events, err := g.getTimeline(owner, repo, issue.Number, maxEvents)
+	if err != nil {
+		return ghItemResult{err: err}
+	}
+	issueReactions, err := g.getReactions(owner, repo, issue.Number, maxEvents)
+	if err != nil {
+		return ghItemResult{err: err}
+	}
+	commentReactions, err := g.getCommentReactions(owner, repo, issue.Number, maxEvents)
+	if err != nil {
+		return ghItemResult{err: err}
+	}
+	var reviews []ghReview
+	var reviewCommentReactions []ghReaction
+	if issue.PullRequest != nil {
+		reviews, err = g.getReviews(owner, repo, issue.Number, maxEvents)
+		if err != nil {
+			return ghItemResult{err: err}
+		}
+		reviewCommentReactions, err = g.getReviewCommentReactions(owner, repo, issue.Number, maxEvents)
+		if err != nil {
+			return ghItemResult{err: err}
+		}
+		var reviewReactions []ghReaction
+		reviewReactions, err = g.getReviewReactions(owner, repo, issue.Number, maxEvents)
+		if err != nil {
+			return ghItemResult{err: err}
+		}
+		reviewCommentReactions = append(reviewCommentReactions, reviewReactions...)
+	}
+	reactions := append(issueReactions, commentReactions...)
+	reactions = append(reactions, reviewCommentReactions...)
+
+	userTouched := false
+	for _, ev := range events {
+		if ignoreUsers.Match(ev.login()) {
+			continue
+		}
+		if ignoreEvents.Match(ev.Event) {
+			continue
+		}
+		if ev.login() != "" && ev.login() == user && ev.CreatedAt.After(cutoff) {
+			userTouched = true
+			break
+		}
+	}
+	if !userTouched {
 		for _, r := range reviews {
 			if ignoreUsers.Match(r.User.Login) {
 				continue
 			}
-			if r.User.Login == user && r.SubmittedAt.After(lastUserTime) {
-				lastUserTime = r.SubmittedAt
+			if r.User.Login == user && r.SubmittedAt.After(cutoff) {
+				userTouched = true
+				break
 			}
 		}
+	}
+	if !userTouched {
 		for _, r := range reactions {
-			if r.User.Login == user && r.CreatedAt.After(lastUserTime) {
-				lastUserTime = r.CreatedAt
+			if r.User.Login == user && r.CreatedAt.After(cutoff) {
+				userTouched = true
+				break
 			}
 		}
+	}
+	if userTouched {
+		fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (cooldown)\033[0m\n", kind, label, title)
+		return ghItemResult{}
+	}
 
-		// Check if any non-user, non-ignored actor has activity after the user's last interaction
-		othersHaveActivity := false
-		for _, ev := range events {
-			if ev.login() != "" && ev.login() != user && !ignoreUsers.Match(ev.login()) && !ignoreEvents.Match(ev.Event) {
-				if lastUserTime.IsZero() || ev.CreatedAt.After(lastUserTime) {
+	var lastUserTime time.Time
+	for _, ev := range events {
+		if ignoreUsers.Match(ev.login()) {
+			continue
+		}
+		if ignoreEvents.Match(ev.Event) {
+			continue
+		}
+		if ev.login() == user && ev.CreatedAt.After(lastUserTime) {
+			lastUserTime = ev.CreatedAt
+		}
+	}
+	for _, r := range reviews {
+		if ignoreUsers.Match(r.User.Login) {
+			continue
+		}
+		if r.User.Login == user && r.SubmittedAt.After(lastUserTime) {
+			lastUserTime = r.SubmittedAt
+		}
+	}
+	for _, r := range reactions {
+		if r.User.Login == user && r.CreatedAt.After(lastUserTime) {
+			lastUserTime = r.CreatedAt
+		}
+	}
+
+	othersHaveActivity := false
+	for _, ev := range events {
+		if ev.login() != "" && ev.login() != user && !ignoreUsers.Match(ev.login()) && !ignoreEvents.Match(ev.Event) {
+			if lastUserTime.IsZero() || ev.CreatedAt.After(lastUserTime) {
+				othersHaveActivity = true
+				break
+			}
+		}
+	}
+	if !othersHaveActivity {
+		for _, r := range reviews {
+			if r.User.Login != user && !ignoreUsers.Match(r.User.Login) {
+				if lastUserTime.IsZero() || r.SubmittedAt.After(lastUserTime) {
 					othersHaveActivity = true
 					break
 				}
 			}
 		}
-		if !othersHaveActivity {
-			for _, r := range reviews {
-				if r.User.Login != user && !ignoreUsers.Match(r.User.Login) {
-					if lastUserTime.IsZero() || r.SubmittedAt.After(lastUserTime) {
-						othersHaveActivity = true
-						break
-					}
-				}
-			}
-		}
-
-		var fmtEvents []format.Event
-		for _, ev := range events {
-			if ev.login() == "" || ev.CreatedAt.IsZero() {
-				continue
-			}
-			if ignoreEvents.Match(ev.Event) {
-				continue
-			}
-			if ev.login() == user || ignoreUsers.Match(ev.login()) {
-				continue
-			}
-			if !lastUserTime.IsZero() && ev.CreatedAt.Before(lastUserTime) {
-				continue
-			}
-			summary := eventSummary(ev.Event, ev.Body)
-			fmtEvents = append(fmtEvents, format.Event{
-				Timestamp: ev.CreatedAt,
-				Author:    ev.login(),
-				Summary:   summary,
-			})
-		}
-		for _, r := range reviews {
-			if r.User.Login == user || ignoreUsers.Match(r.User.Login) {
-				continue
-			}
-			if !lastUserTime.IsZero() && r.SubmittedAt.Before(lastUserTime) {
-				continue
-			}
-			summary := reviewSummary(r.State, r.Body)
-			fmtEvents = append(fmtEvents, format.Event{
-				Timestamp: r.SubmittedAt,
-				Author:    r.User.Login,
-				Summary:   summary,
-			})
-		}
-
-		if len(fmtEvents) == 0 {
-			// If the user has already interacted and there's no new activity
-			// from others, skip — there's nothing new for the user to act on.
-			// If no one else has touched it, the user hasn't interacted, and
-			// it was filed by someone else, include a synthetic "opened" event.
-			if othersHaveActivity || !lastUserTime.IsZero() || issue.User.Login == user {
-				fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (no new activity)\033[0m\n", kind, label, title)
-				continue
-			}
-			fmtEvents = append(fmtEvents, format.Event{
-				Timestamp: issue.CreatedAt,
-				Author:    issue.User.Login,
-				Summary:   "opened",
-			})
-		}
-
-		tier := 3
-		if issue.User.Login == user {
-			tier = 1
-		} else if !lastUserTime.IsZero() {
-			tier = 2
-		}
-
-		emit(format.Item{
-			URL:    issue.HTMLURL,
-			Title:  issue.Title,
-			Events: fmtEvents,
-			Tier:   tier,
-		})
-		found++
 	}
 
-	return nil
+	var fmtEvents []format.Event
+	for _, ev := range events {
+		if ev.login() == "" || ev.CreatedAt.IsZero() {
+			continue
+		}
+		if ignoreEvents.Match(ev.Event) {
+			continue
+		}
+		if ev.login() == user || ignoreUsers.Match(ev.login()) {
+			continue
+		}
+		if !lastUserTime.IsZero() && ev.CreatedAt.Before(lastUserTime) {
+			continue
+		}
+		summary := eventSummary(ev.Event, ev.Body)
+		fmtEvents = append(fmtEvents, format.Event{
+			Timestamp: ev.CreatedAt,
+			Author:    ev.login(),
+			Summary:   summary,
+		})
+	}
+	for _, r := range reviews {
+		if r.User.Login == user || ignoreUsers.Match(r.User.Login) {
+			continue
+		}
+		if !lastUserTime.IsZero() && r.SubmittedAt.Before(lastUserTime) {
+			continue
+		}
+		summary := reviewSummary(r.State, r.Body)
+		fmtEvents = append(fmtEvents, format.Event{
+			Timestamp: r.SubmittedAt,
+			Author:    r.User.Login,
+			Summary:   summary,
+		})
+	}
+
+	if len(fmtEvents) == 0 {
+		if othersHaveActivity || !lastUserTime.IsZero() || issue.User.Login == user {
+			fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (no new activity)\033[0m\n", kind, label, title)
+			return ghItemResult{}
+		}
+		fmtEvents = append(fmtEvents, format.Event{
+			Timestamp: issue.CreatedAt,
+			Author:    issue.User.Login,
+			Summary:   "opened",
+		})
+	}
+
+	tier := 3
+	if issue.User.Login == user {
+		tier = 1
+	} else if !lastUserTime.IsZero() {
+		tier = 2
+	}
+
+	item := format.Item{
+		URL:    issue.HTMLURL,
+		Title:  issue.Title,
+		Events: fmtEvents,
+		Tier:   tier,
+	}
+	return ghItemResult{item: &item}
 }
 
 func (g *gitHub) listRepoIssues(owner, repo string, since time.Time) ([]ghIssue, error) {
@@ -449,9 +492,9 @@ func parseRepoFromURL(htmlURL string) (string, string) {
 	return "", ""
 }
 
-func (g *gitHub) getTimeline(owner, repo string, number int) ([]ghTimelineEvent, error) {
+func (g *gitHub) getTimeline(owner, repo string, number, maxEvents int) ([]ghTimelineEvent, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/timeline", owner, repo, number)
-	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
+	out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get timeline for #%d: %w", number, err)
 	}
@@ -462,9 +505,9 @@ func (g *gitHub) getTimeline(owner, repo string, number int) ([]ghTimelineEvent,
 	return events, nil
 }
 
-func (g *gitHub) getReactions(owner, repo string, number int) ([]ghReaction, error) {
+func (g *gitHub) getReactions(owner, repo string, number, maxEvents int) ([]ghReaction, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/reactions", owner, repo, number)
-	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
+	out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get reactions for #%d: %w", number, err)
 	}
@@ -475,8 +518,8 @@ func (g *gitHub) getReactions(owner, repo string, number int) ([]ghReaction, err
 	return reactions, nil
 }
 
-func (g *gitHub) getCommentReactions(owner, repo string, number int) ([]ghReaction, error) {
-	comments, err := g.getComments(owner, repo, number)
+func (g *gitHub) getCommentReactions(owner, repo string, number, maxEvents int) ([]ghReaction, error) {
+	comments, err := g.getComments(owner, repo, number, maxEvents)
 	if err != nil {
 		return nil, err
 	}
@@ -486,7 +529,7 @@ func (g *gitHub) getCommentReactions(owner, repo string, number int) ([]ghReacti
 			continue
 		}
 		endpoint := fmt.Sprintf("repos/%s/%s/issues/comments/%d/reactions", owner, repo, c.ID)
-		out, err := g.runAPI("gh", "api", endpoint, "--paginate")
+		out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get reactions for comment %d: %w", c.ID, err)
 		}
@@ -499,9 +542,9 @@ func (g *gitHub) getCommentReactions(owner, repo string, number int) ([]ghReacti
 	return all, nil
 }
 
-func (g *gitHub) getReviewCommentReactions(owner, repo string, number int) ([]ghReaction, error) {
+func (g *gitHub) getReviewCommentReactions(owner, repo string, number, maxEvents int) ([]ghReaction, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/comments", owner, repo, number)
-	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
+	out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get review comments for #%d: %w", number, err)
 	}
@@ -515,7 +558,7 @@ func (g *gitHub) getReviewCommentReactions(owner, repo string, number int) ([]gh
 			continue
 		}
 		ep := fmt.Sprintf("repos/%s/%s/pulls/comments/%d/reactions", owner, repo, c.ID)
-		out, err := g.runAPI("gh", "api", ep, "--paginate")
+		out, err := g.runAPI("gh", perItemArgs(ep, maxEvents)...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get reactions for review comment %d: %w", c.ID, err)
 		}
@@ -528,9 +571,9 @@ func (g *gitHub) getReviewCommentReactions(owner, repo string, number int) ([]gh
 	return all, nil
 }
 
-func (g *gitHub) getComments(owner, repo string, number int) ([]ghComment, error) {
+func (g *gitHub) getComments(owner, repo string, number, maxEvents int) ([]ghComment, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number)
-	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
+	out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get comments for #%d: %w", number, err)
 	}
@@ -541,13 +584,19 @@ func (g *gitHub) getComments(owner, repo string, number int) ([]ghComment, error
 	return comments, nil
 }
 
-func (g *gitHub) getReviewReactions(owner, repo string, number int) ([]ghReaction, error) {
+func (g *gitHub) getReviewReactions(owner, repo string, number, maxEvents int) ([]ghReaction, error) {
+	reviewsFirst := 100
+	reactionsFirst := 100
+	if maxEvents > 0 {
+		reviewsFirst = maxEvents
+		reactionsFirst = maxEvents
+	}
 	query := fmt.Sprintf(`{
 		repository(owner: %q, name: %q) {
 			pullRequest(number: %d) {
-				reviews(first: 100) {
+				reviews(first: %d) {
 					nodes {
-						reactions(first: 100) {
+						reactions(first: %d) {
 							nodes {
 								user { login }
 								content
@@ -558,7 +607,7 @@ func (g *gitHub) getReviewReactions(owner, repo string, number int) ([]ghReactio
 				}
 			}
 		}
-	}`, owner, repo, number)
+	}`, owner, repo, number, reviewsFirst, reactionsFirst)
 	out, err := g.runAPI("gh", "api", "graphql", "-f", "query="+query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get review reactions for #%d: %w", number, err)
@@ -598,9 +647,9 @@ func (g *gitHub) getReviewReactions(owner, repo string, number int) ([]ghReactio
 	return all, nil
 }
 
-func (g *gitHub) getReviews(owner, repo string, number int) ([]ghReview, error) {
+func (g *gitHub) getReviews(owner, repo string, number, maxEvents int) ([]ghReview, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number)
-	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
+	out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get reviews for #%d: %w", number, err)
 	}

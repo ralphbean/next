@@ -73,6 +73,7 @@ func run() error {
 	ignoreStr := flag.String("ignore-events", "labeled,unlabeled,mentioned,subscribed,assigned,unassigned,referenced,cross-referenced,head_ref_force_pushed,convert_to_draft,renamed,project_v2_item_status_changed,added_to_project_v2,parent_issue_added,blocked_by_added,blocking_added,marked_as_duplicate", "comma-separated list of event patterns to ignore (supports * wildcards)")
 	ignoreUsersStr := flag.String("ignore-users", "*[bot]", "comma-separated list of user patterns to ignore (supports * wildcards)")
 	limit := flag.Int("limit", 1, "maximum number of items to show")
+	maxEvents := flag.Int("max-events", 100, "maximum events/comments/reactions to fetch per item (0 = no limit)")
 	scopeStr := flag.String("scope", "repo", "scope to search: repo (current repo) or org (all repos in the org)")
 	autoOpen := flag.Bool("auto-open", false, "automatically open each result in the browser")
 	showConfig := flag.Bool("show-config", false, "show configured remotes for all repos")
@@ -184,7 +185,7 @@ func run() error {
 		fmt.Print("\033[0m")
 	}
 
-	err = b.NextItems(info.Owner, info.Name, user, cooldown, sinceTime, ignore, ignoreUsers, *limit, scope, emit)
+	err = b.NextItems(info.Owner, info.Name, user, cooldown, sinceTime, ignore, ignoreUsers, *limit, *maxEvents, scope, emit)
 	if err != nil {
 		return err
 	}

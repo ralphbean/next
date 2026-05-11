@@ -98,7 +98,7 @@ func (g *gitLab) CurrentUser() (string, error) {
 	return u.Username, nil
 }
 
-func (g *gitLab) NextItems(owner, repo, user string, cooldown time.Duration, since time.Time, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, scope Scope, emit func(format.Item)) error {
+func (g *gitLab) NextItems(owner, repo, user string, cooldown time.Duration, since time.Time, ignoreEvents MatchSet, ignoreUsers MatchSet, limit int, maxEvents int, scope Scope, emit func(format.Item)) error {
 	// Fetch issues and MRs in parallel
 	var issues []glIssue
 	var mrs []glMR
@@ -179,124 +179,36 @@ func (g *gitLab) NextItems(owner, repo, user string, cooldown time.Duration, sin
 	orderedItems := append(authoredItems, otherItems...)
 
 	found := 0
-	for _, item := range orderedItems {
-		if found >= limit {
-			break
+	for batchStart := 0; batchStart < len(orderedItems) && found < limit; batchStart += maxConcurrency {
+		batchEnd := batchStart + maxConcurrency
+		if batchEnd > len(orderedItems) {
+			batchEnd = len(orderedItems)
 		}
-		notes, err := g.getNotes(item.ProjectRef, item.Kind, item.IID)
-		if err != nil {
-			return err
-		}
+		batch := orderedItems[batchStart:batchEnd]
 
-		kind := "issue"
-		label := fmt.Sprintf("#%d", item.IID)
-		if item.Kind == "merge_requests" {
-			kind = "MR"
-			label = fmt.Sprintf("!%d", item.IID)
+		results := make([]glItemResult, len(batch))
+		var wg sync.WaitGroup
+		for i, item := range batch {
+			wg.Add(1)
+			go func(idx int, it glItem) {
+				defer wg.Done()
+				results[idx] = g.processItem(it, user, cutoff, ignoreEvents, ignoreUsers, maxEvents)
+			}(i, item)
 		}
-		title := item.Title
-		if r := []rune(title); len(r) > 50 {
-			title = string(r[:50]) + "..."
-		}
+		wg.Wait()
 
-		userTouched := false
-		for _, n := range notes {
-			if ignoreUsers.Match(n.Author.Username) {
-				continue
+		for _, res := range results {
+			if res.err != nil {
+				return res.err
 			}
-			if n.System && !isApprovalNote(n.Body) {
-				continue
-			}
-			if n.Author.Username == user && n.CreatedAt.After(cutoff) {
-				userTouched = true
-				break
-			}
-		}
-		if userTouched {
-			fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (cooldown)\033[0m\n", kind, label, title)
-			continue
-		}
-
-		var lastUserTime time.Time
-		for _, n := range notes {
-			if ignoreUsers.Match(n.Author.Username) {
-				continue
-			}
-			if n.System && !isApprovalNote(n.Body) {
-				continue
-			}
-			if n.Author.Username == user && n.CreatedAt.After(lastUserTime) {
-				lastUserTime = n.CreatedAt
-			}
-		}
-
-		othersHaveActivity := false
-		for _, n := range notes {
-			if n.Author.Username == user || ignoreUsers.Match(n.Author.Username) {
-				continue
-			}
-			if !n.System || isApprovalNote(n.Body) {
-				if lastUserTime.IsZero() || n.CreatedAt.After(lastUserTime) {
-					othersHaveActivity = true
+			if res.item != nil {
+				emit(*res.item)
+				found++
+				if found >= limit {
 					break
 				}
 			}
 		}
-
-		var fmtEvents []format.Event
-		for _, n := range notes {
-			if n.Author.Username == user || ignoreUsers.Match(n.Author.Username) {
-				continue
-			}
-			if n.System && !isApprovalNote(n.Body) {
-				continue
-			}
-			if !lastUserTime.IsZero() && n.CreatedAt.Before(lastUserTime) {
-				continue
-			}
-			var summary string
-			if isApprovalNote(n.Body) {
-				summary = "approved"
-			} else {
-				body := n.Body
-				if r := []rune(body); len(r) > 80 {
-					body = string(r[:80])
-				}
-				summary = fmt.Sprintf("commented: > %s", body)
-			}
-			fmtEvents = append(fmtEvents, format.Event{
-				Timestamp: n.CreatedAt,
-				Author:    n.Author.Username,
-				Summary:   summary,
-			})
-		}
-
-		if len(fmtEvents) == 0 {
-			if othersHaveActivity || !lastUserTime.IsZero() || item.Author == user {
-				fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (no new activity)\033[0m\n", kind, label, title)
-				continue
-			}
-			fmtEvents = append(fmtEvents, format.Event{
-				Timestamp: item.CreatedAt,
-				Author:    item.Author,
-				Summary:   "opened",
-			})
-		}
-
-		tier := 3
-		if item.Author == user {
-			tier = 1
-		} else if !lastUserTime.IsZero() {
-			tier = 2
-		}
-
-		emit(format.Item{
-			URL:    item.WebURL,
-			Title:  item.Title,
-			Events: fmtEvents,
-			Tier:   tier,
-		})
-		found++
 	}
 
 	return nil
@@ -370,9 +282,137 @@ func isApprovalNote(body string) bool {
 	return strings.Contains(body, "approved this merge request")
 }
 
-func (g *gitLab) getNotes(projectPath, kind string, iid int) ([]glNote, error) {
+type glItemResult struct {
+	item *format.Item
+	err  error
+}
+
+func (g *gitLab) processItem(item glItem, user string, cutoff time.Time, ignoreEvents, ignoreUsers MatchSet, maxEvents int) glItemResult {
+	notes, err := g.getNotes(item.ProjectRef, item.Kind, item.IID, maxEvents)
+	if err != nil {
+		return glItemResult{err: err}
+	}
+
+	kind := "issue"
+	label := fmt.Sprintf("#%d", item.IID)
+	if item.Kind == "merge_requests" {
+		kind = "MR"
+		label = fmt.Sprintf("!%d", item.IID)
+	}
+	title := item.Title
+	if r := []rune(title); len(r) > 50 {
+		title = string(r[:50]) + "..."
+	}
+
+	userTouched := false
+	for _, n := range notes {
+		if ignoreUsers.Match(n.Author.Username) {
+			continue
+		}
+		if n.System && !isApprovalNote(n.Body) {
+			continue
+		}
+		if n.Author.Username == user && n.CreatedAt.After(cutoff) {
+			userTouched = true
+			break
+		}
+	}
+	if userTouched {
+		fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (cooldown)\033[0m\n", kind, label, title)
+		return glItemResult{}
+	}
+
+	var lastUserTime time.Time
+	for _, n := range notes {
+		if ignoreUsers.Match(n.Author.Username) {
+			continue
+		}
+		if n.System && !isApprovalNote(n.Body) {
+			continue
+		}
+		if n.Author.Username == user && n.CreatedAt.After(lastUserTime) {
+			lastUserTime = n.CreatedAt
+		}
+	}
+
+	othersHaveActivity := false
+	for _, n := range notes {
+		if n.Author.Username == user || ignoreUsers.Match(n.Author.Username) {
+			continue
+		}
+		if !n.System || isApprovalNote(n.Body) {
+			if lastUserTime.IsZero() || n.CreatedAt.After(lastUserTime) {
+				othersHaveActivity = true
+				break
+			}
+		}
+	}
+
+	var fmtEvents []format.Event
+	for _, n := range notes {
+		if n.Author.Username == user || ignoreUsers.Match(n.Author.Username) {
+			continue
+		}
+		if n.System && !isApprovalNote(n.Body) {
+			continue
+		}
+		if !lastUserTime.IsZero() && n.CreatedAt.Before(lastUserTime) {
+			continue
+		}
+		var summary string
+		if isApprovalNote(n.Body) {
+			summary = "approved"
+		} else {
+			body := n.Body
+			if r := []rune(body); len(r) > 80 {
+				body = string(r[:80])
+			}
+			summary = fmt.Sprintf("commented: > %s", body)
+		}
+		fmtEvents = append(fmtEvents, format.Event{
+			Timestamp: n.CreatedAt,
+			Author:    n.Author.Username,
+			Summary:   summary,
+		})
+	}
+
+	if len(fmtEvents) == 0 {
+		if othersHaveActivity || !lastUserTime.IsZero() || item.Author == user {
+			fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (no new activity)\033[0m\n", kind, label, title)
+			return glItemResult{}
+		}
+		fmtEvents = append(fmtEvents, format.Event{
+			Timestamp: item.CreatedAt,
+			Author:    item.Author,
+			Summary:   "opened",
+		})
+	}
+
+	tier := 3
+	if item.Author == user {
+		tier = 1
+	} else if !lastUserTime.IsZero() {
+		tier = 2
+	}
+
+	result := format.Item{
+		URL:    item.WebURL,
+		Title:  item.Title,
+		Events: fmtEvents,
+		Tier:   tier,
+	}
+	return glItemResult{item: &result}
+}
+
+func (g *gitLab) getNotes(projectPath, kind string, iid, maxEvents int) ([]glNote, error) {
 	endpoint := fmt.Sprintf("projects/%s/%s/%d/notes", projectPath, kind, iid)
-	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
+	var args []string
+	if maxEvents > 0 {
+		args = []string{"api", fmt.Sprintf("%s?per_page=%d", endpoint, maxEvents)}
+	} else {
+		args = []string{"api", endpoint, "--paginate"}
+	}
+	out, err := g.run(g.cmd(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get notes for %s #%d: %w", kind, iid, err)
 	}

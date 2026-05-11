@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,7 +15,7 @@ import (
 func glCollect(t *testing.T, gl Backend, owner, repo, user string, cooldown time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
 	t.Helper()
 	var items []format.Item
-	err := gl.NextItems(owner, repo, user, cooldown, time.Time{}, ignoreEvents, ignoreUsers, limit, ScopeRepo, func(item format.Item) {
+	err := gl.NextItems(owner, repo, user, cooldown, time.Time{}, ignoreEvents, ignoreUsers, limit, 0, ScopeRepo, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -326,7 +328,7 @@ func TestGitLabNextItemsOrgScope(t *testing.T) {
 
 	gl := NewGitLab(runner, "")
 	var items []format.Item
-	err := gl.NextItems("mygroup", "", "me", 30*time.Minute, time.Time{}, nil, nil, 5, ScopeOrg, func(item format.Item) {
+	err := gl.NextItems("mygroup", "", "me", 30*time.Minute, time.Time{}, nil, nil, 5, 0, ScopeOrg, func(item format.Item) {
 		items = append(items, item)
 	})
 	if err != nil {
@@ -462,6 +464,7 @@ func TestGitLabSincePassedToAPI(t *testing.T) {
 	since := now.Add(-7 * 24 * time.Hour) // 7 days ago
 
 	var capturedEndpoints []string
+	var mu sync.Mutex
 
 	runner := func(name string, args ...string) ([]byte, error) {
 		for _, a := range args {
@@ -469,7 +472,9 @@ func TestGitLabSincePassedToAPI(t *testing.T) {
 				return []byte(`{"username":"me"}`), nil
 			}
 			if strings.Contains(a, "issues?") || strings.Contains(a, "merge_requests?") {
+				mu.Lock()
 				capturedEndpoints = append(capturedEndpoints, a)
+				mu.Unlock()
 				if strings.Contains(a, "issues?") {
 					return json.Marshal([]glIssue{})
 				}
@@ -480,7 +485,7 @@ func TestGitLabSincePassedToAPI(t *testing.T) {
 	}
 
 	gl := NewGitLab(runner, "")
-	err := gl.NextItems("o", "r", "me", 30*time.Minute, since, nil, nil, 5, ScopeRepo, func(item format.Item) {})
+	err := gl.NextItems("o", "r", "me", 30*time.Minute, since, nil, nil, 5, 0, ScopeRepo, func(item format.Item) {})
 	if err != nil {
 		t.Fatalf("NextItems() error: %v", err)
 	}
@@ -578,5 +583,177 @@ func TestGitLabTierOrdering(t *testing.T) {
 	}
 	if items[2].Tier != 2 {
 		t.Errorf("third item: expected Tier 2, got %d", items[2].Tier)
+	}
+}
+
+func TestGitLabDefaultMaxEvents(t *testing.T) {
+	now := time.Now()
+
+	issues := []glIssue{
+		{
+			IID:       1,
+			Title:     "Recent issue",
+			WebURL:    "https://gitlab.com/o/r/-/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+			Author:    glNoteAuthor{Username: "other"},
+		},
+	}
+	notes := []glNote{
+		{Body: "please review", CreatedAt: now.Add(-10 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.Contains(a, "issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.Contains(a, "merge_requests?") {
+				return json.Marshal([]glMR{})
+			}
+			if strings.Contains(a, "/notes") {
+				return json.Marshal(notes)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	var items []format.Item
+	err := gl.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 1, 100, ScopeRepo, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].Title != "Recent issue" {
+		t.Errorf("expected 'Recent issue', got %q", items[0].Title)
+	}
+}
+
+func TestGitLabMaxEventsLimitsPagination(t *testing.T) {
+	now := time.Now()
+
+	issues := []glIssue{
+		{
+			IID:       1,
+			Title:     "Issue with notes",
+			WebURL:    "https://gitlab.com/o/r/-/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+			Author:    glNoteAuthor{Username: "other"},
+		},
+	}
+	notes := []glNote{
+		{Body: "hello", CreatedAt: now.Add(-10 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+	}
+
+	var perItemPaginate atomic.Bool
+	runner := func(name string, args ...string) ([]byte, error) {
+		isPerItem := false
+		for _, a := range args {
+			if strings.Contains(a, "/notes") {
+				isPerItem = true
+			}
+		}
+		if isPerItem {
+			for _, a := range args {
+				if a == "--paginate" {
+					perItemPaginate.Store(true)
+				}
+			}
+		}
+		for _, a := range args {
+			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.HasPrefix(a, "projects/o%2Fr/merge_requests?") {
+				return json.Marshal([]glMR{})
+			}
+			if strings.Contains(a, "/notes") {
+				return json.Marshal(notes)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	err := gl.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 5, 50, ScopeRepo, func(item format.Item) {})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if perItemPaginate.Load() {
+		t.Error("getNotes should not use --paginate when maxEvents > 0")
+	}
+}
+
+func TestGitLabParallelFetching(t *testing.T) {
+	now := time.Now()
+
+	var issues []glIssue
+	for i := 1; i <= 10; i++ {
+		issues = append(issues, glIssue{
+			IID:       i,
+			Title:     fmt.Sprintf("Issue %d", i),
+			WebURL:    fmt.Sprintf("https://gitlab.com/o/r/-/issues/%d", i),
+			UpdatedAt: now.Add(-time.Duration(i) * time.Minute),
+			Author:    glNoteAuthor{Username: "other"},
+		})
+	}
+
+	var concurrentPeak atomic.Int32
+	var current atomic.Int32
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.HasPrefix(a, "projects/o%2Fr/merge_requests?") {
+				return json.Marshal([]glMR{})
+			}
+			if strings.Contains(a, "/notes") {
+				n := current.Add(1)
+				for {
+					peak := concurrentPeak.Load()
+					if n <= peak {
+						break
+					}
+					if concurrentPeak.CompareAndSwap(peak, n) {
+						break
+					}
+				}
+				time.Sleep(10 * time.Millisecond)
+				current.Add(-1)
+				iid := 0
+				fmt.Sscanf(a, "projects/o%%2Fr/issues/%d/notes", &iid)
+				return json.Marshal([]glNote{
+					{Body: "comment", CreatedAt: now.Add(-time.Duration(iid) * time.Minute), Author: glNoteAuthor{Username: "other"}},
+				})
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	var items []format.Item
+	err := gl.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 10, 0, ScopeRepo, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 10 {
+		t.Fatalf("expected 10 items, got %d", len(items))
+	}
+	if items[0].Title != "Issue 1" {
+		t.Errorf("first item should be Issue 1, got %q", items[0].Title)
+	}
+	if items[9].Title != "Issue 10" {
+		t.Errorf("last item should be Issue 10, got %q", items[9].Title)
+	}
+	if peak := concurrentPeak.Load(); peak <= 1 {
+		t.Errorf("expected concurrent execution (peak > 1), got peak=%d", peak)
 	}
 }
