@@ -1632,8 +1632,8 @@ func TestGitHubMaxEventsLimitsPagination(t *testing.T) {
 	runner := func(name string, args ...string) ([]byte, error) {
 		isPerItem := false
 		for _, a := range args {
-			if strings.HasSuffix(a, "/timeline") || strings.HasSuffix(a, "/reactions") ||
-				strings.HasSuffix(a, "/comments") || strings.HasSuffix(a, "/reviews") {
+			if strings.Contains(a, "/timeline") || strings.Contains(a, "/reactions") ||
+				strings.Contains(a, "/comments") || strings.Contains(a, "/reviews") {
 				isPerItem = true
 			}
 		}
@@ -1648,13 +1648,13 @@ func TestGitHubMaxEventsLimitsPagination(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
-			if strings.HasSuffix(a, "/timeline") {
+			if strings.Contains(a, "/timeline") {
 				return json.Marshal(events)
 			}
-			if strings.HasSuffix(a, "/reactions") {
+			if strings.Contains(a, "/reactions") {
 				return json.Marshal([]ghReaction{})
 			}
-			if strings.HasSuffix(a, "/comments") {
+			if strings.Contains(a, "/comments") {
 				return json.Marshal([]ghComment{})
 			}
 		}

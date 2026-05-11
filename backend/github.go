@@ -82,7 +82,7 @@ const maxRetries = 3
 
 func perItemArgs(endpoint string, maxEvents int) []string {
 	if maxEvents > 0 {
-		return []string{"api", endpoint, "-f", fmt.Sprintf("per_page=%d", maxEvents)}
+		return []string{"api", fmt.Sprintf("%s?per_page=%d", endpoint, maxEvents)}
 	}
 	return []string{"api", endpoint, "--paginate"}
 }
