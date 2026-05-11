@@ -1534,6 +1534,83 @@ func TestGitHubSincePassedToOrgSearch(t *testing.T) {
 	}
 }
 
+func TestGitHubParallelFetching(t *testing.T) {
+	now := time.Now()
+
+	var issues []ghIssue
+	for i := 1; i <= 10; i++ {
+		issues = append(issues, ghIssue{
+			Number:    i,
+			Title:     fmt.Sprintf("Issue %d", i),
+			HTMLURL:   fmt.Sprintf("https://github.com/o/r/issues/%d", i),
+			UpdatedAt: now.Add(-time.Duration(i) * time.Minute),
+			User:      ghActor{Login: "other"},
+		})
+	}
+
+	var concurrentPeak atomic.Int32
+	var current atomic.Int32
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if strings.HasSuffix(a, "/timeline") {
+				n := current.Add(1)
+				for {
+					peak := concurrentPeak.Load()
+					if n <= peak {
+						break
+					}
+					if concurrentPeak.CompareAndSwap(peak, n) {
+						break
+					}
+				}
+				time.Sleep(10 * time.Millisecond)
+				current.Add(-1)
+				issueNum := 0
+				for _, arg := range args {
+					if strings.Contains(arg, "/timeline") {
+						fmt.Sscanf(arg, "repos/o/r/issues/%d/timeline", &issueNum)
+					}
+				}
+				return json.Marshal([]ghTimelineEvent{
+					{Event: "commented", CreatedAt: now.Add(-time.Duration(issueNum) * time.Minute), Actor: ghActor{Login: "other"}, Body: "comment"},
+				})
+			}
+			if strings.HasSuffix(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.HasSuffix(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	var items []format.Item
+	err := gh.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 10, 0, ScopeRepo, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 10 {
+		t.Fatalf("expected 10 items, got %d", len(items))
+	}
+	if items[0].Title != "Issue 1" {
+		t.Errorf("first item should be Issue 1, got %q", items[0].Title)
+	}
+	if items[9].Title != "Issue 10" {
+		t.Errorf("last item should be Issue 10, got %q", items[9].Title)
+	}
+	if peak := concurrentPeak.Load(); peak <= 1 {
+		t.Errorf("expected concurrent execution (peak > 1), got peak=%d", peak)
+	}
+}
+
 func TestGitHubMaxEventsLimitsPagination(t *testing.T) {
 	now := time.Now()
 
