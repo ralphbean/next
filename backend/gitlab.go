@@ -183,7 +183,7 @@ func (g *gitLab) NextItems(owner, repo, user string, cooldown time.Duration, sin
 		if found >= limit {
 			break
 		}
-		notes, err := g.getNotes(item.ProjectRef, item.Kind, item.IID)
+		notes, err := g.getNotes(item.ProjectRef, item.Kind, item.IID, maxEvents)
 		if err != nil {
 			return err
 		}
@@ -370,9 +370,15 @@ func isApprovalNote(body string) bool {
 	return strings.Contains(body, "approved this merge request")
 }
 
-func (g *gitLab) getNotes(projectPath, kind string, iid int) ([]glNote, error) {
+func (g *gitLab) getNotes(projectPath, kind string, iid, maxEvents int) ([]glNote, error) {
 	endpoint := fmt.Sprintf("projects/%s/%s/%d/notes", projectPath, kind, iid)
-	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
+	var args []string
+	if maxEvents > 0 {
+		args = []string{"api", fmt.Sprintf("%s?per_page=%d", endpoint, maxEvents)}
+	} else {
+		args = []string{"api", endpoint, "--paginate"}
+	}
+	out, err := g.run(g.cmd(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get notes for %s #%d: %w", kind, iid, err)
 	}

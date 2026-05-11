@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -578,5 +579,60 @@ func TestGitLabTierOrdering(t *testing.T) {
 	}
 	if items[2].Tier != 2 {
 		t.Errorf("third item: expected Tier 2, got %d", items[2].Tier)
+	}
+}
+
+func TestGitLabMaxEventsLimitsPagination(t *testing.T) {
+	now := time.Now()
+
+	issues := []glIssue{
+		{
+			IID:       1,
+			Title:     "Issue with notes",
+			WebURL:    "https://gitlab.com/o/r/-/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+			Author:    glNoteAuthor{Username: "other"},
+		},
+	}
+	notes := []glNote{
+		{Body: "hello", CreatedAt: now.Add(-10 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+	}
+
+	var perItemPaginate atomic.Bool
+	runner := func(name string, args ...string) ([]byte, error) {
+		isPerItem := false
+		for _, a := range args {
+			if strings.Contains(a, "/notes") {
+				isPerItem = true
+			}
+		}
+		if isPerItem {
+			for _, a := range args {
+				if a == "--paginate" {
+					perItemPaginate.Store(true)
+				}
+			}
+		}
+		for _, a := range args {
+			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.HasPrefix(a, "projects/o%2Fr/merge_requests?") {
+				return json.Marshal([]glMR{})
+			}
+			if strings.Contains(a, "/notes") {
+				return json.Marshal(notes)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	err := gl.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 5, 50, ScopeRepo, func(item format.Item) {})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if perItemPaginate.Load() {
+		t.Error("getNotes should not use --paginate when maxEvents > 0")
 	}
 }
