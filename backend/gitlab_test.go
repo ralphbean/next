@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -463,6 +464,7 @@ func TestGitLabSincePassedToAPI(t *testing.T) {
 	since := now.Add(-7 * 24 * time.Hour) // 7 days ago
 
 	var capturedEndpoints []string
+	var mu sync.Mutex
 
 	runner := func(name string, args ...string) ([]byte, error) {
 		for _, a := range args {
@@ -470,7 +472,9 @@ func TestGitLabSincePassedToAPI(t *testing.T) {
 				return []byte(`{"username":"me"}`), nil
 			}
 			if strings.Contains(a, "issues?") || strings.Contains(a, "merge_requests?") {
+				mu.Lock()
 				capturedEndpoints = append(capturedEndpoints, a)
+				mu.Unlock()
 				if strings.Contains(a, "issues?") {
 					return json.Marshal([]glIssue{})
 				}

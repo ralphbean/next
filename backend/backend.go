@@ -50,6 +50,8 @@ type Scope string
 const (
 	ScopeRepo Scope = "repo"
 	ScopeOrg  Scope = "org"
+
+	maxConcurrency = 5
 )
 
 // Backend fetches issues/PRs from a hosting platform.

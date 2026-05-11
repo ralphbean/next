@@ -87,8 +87,6 @@ func perItemArgs(endpoint string, maxEvents int) []string {
 	return []string{"api", endpoint, "--paginate"}
 }
 
-const maxConcurrency = 5
-
 type ghItemResult struct {
 	item *format.Item
 	err  error
