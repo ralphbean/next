@@ -1611,6 +1611,57 @@ func TestGitHubParallelFetching(t *testing.T) {
 	}
 }
 
+func TestGitHubDefaultMaxEvents(t *testing.T) {
+	now := time.Now()
+
+	issues := []ghIssue{
+		{
+			Number:    1,
+			Title:     "Recent issue",
+			HTMLURL:   "https://github.com/o/r/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+			User:      ghActor{Login: "other"},
+		},
+	}
+
+	events := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-10 * time.Minute), Actor: ghActor{Login: "other"}, Body: "please review"},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if strings.Contains(a, "/timeline") {
+				return json.Marshal(events)
+			}
+			if strings.Contains(a, "/reactions") {
+				return json.Marshal([]ghReaction{})
+			}
+			if strings.Contains(a, "/comments") {
+				return json.Marshal([]ghComment{})
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	var items []format.Item
+	err := gh.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 1, 100, ScopeRepo, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].Title != "Recent issue" {
+		t.Errorf("expected 'Recent issue', got %q", items[0].Title)
+	}
+}
+
 func TestGitHubMaxEventsLimitsPagination(t *testing.T) {
 	now := time.Now()
 

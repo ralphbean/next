@@ -586,6 +586,53 @@ func TestGitLabTierOrdering(t *testing.T) {
 	}
 }
 
+func TestGitLabDefaultMaxEvents(t *testing.T) {
+	now := time.Now()
+
+	issues := []glIssue{
+		{
+			IID:       1,
+			Title:     "Recent issue",
+			WebURL:    "https://gitlab.com/o/r/-/issues/1",
+			UpdatedAt: now.Add(-10 * time.Minute),
+			Author:    glNoteAuthor{Username: "other"},
+		},
+	}
+	notes := []glNote{
+		{Body: "please review", CreatedAt: now.Add(-10 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+	}
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.Contains(a, "issues?") {
+				return json.Marshal(issues)
+			}
+			if strings.Contains(a, "merge_requests?") {
+				return json.Marshal([]glMR{})
+			}
+			if strings.Contains(a, "/notes") {
+				return json.Marshal(notes)
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gl := NewGitLab(runner, "")
+	var items []format.Item
+	err := gl.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 1, 100, ScopeRepo, func(item format.Item) {
+		items = append(items, item)
+	})
+	if err != nil {
+		t.Fatalf("NextItems() error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].Title != "Recent issue" {
+		t.Errorf("expected 'Recent issue', got %q", items[0].Title)
+	}
+}
+
 func TestGitLabMaxEventsLimitsPagination(t *testing.T) {
 	now := time.Now()
 
