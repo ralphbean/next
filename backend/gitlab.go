@@ -406,19 +406,16 @@ func (g *gitLab) processItem(item glItem, user string, cutoff time.Time, ignoreE
 
 func (g *gitLab) getNotes(projectPath, kind string, iid, maxEvents int) ([]glNote, error) {
 	endpoint := fmt.Sprintf("projects/%s/%s/%d/notes", projectPath, kind, iid)
-	var args []string
-	if maxEvents > 0 {
-		args = []string{"api", fmt.Sprintf("%s?per_page=%d", endpoint, maxEvents)}
-	} else {
-		args = []string{"api", endpoint, "--paginate"}
-	}
-	out, err := g.run(g.cmd(), args...)
+	out, err := g.run(g.cmd(), "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get notes for %s #%d: %w", kind, iid, err)
 	}
 	var notes []glNote
 	if err := json.Unmarshal(fixPaginatedJSON(out), &notes); err != nil {
 		return nil, fmt.Errorf("failed to parse notes: %w", err)
+	}
+	if maxEvents > 0 && len(notes) > maxEvents {
+		notes = notes[len(notes)-maxEvents:]
 	}
 	return notes, nil
 }
