@@ -633,37 +633,27 @@ func TestGitLabDefaultMaxEvents(t *testing.T) {
 	}
 }
 
-func TestGitLabMaxEventsLimitsPagination(t *testing.T) {
+func TestGitLabMaxEventsKeepsMostRecent(t *testing.T) {
 	now := time.Now()
 
 	issues := []glIssue{
 		{
 			IID:       1,
-			Title:     "Issue with notes",
+			Title:     "Issue with many notes",
 			WebURL:    "https://gitlab.com/o/r/-/issues/1",
-			UpdatedAt: now.Add(-10 * time.Minute),
+			UpdatedAt: now.Add(-5 * time.Minute),
 			Author:    glNoteAuthor{Username: "other"},
 		},
 	}
 	notes := []glNote{
-		{Body: "hello", CreatedAt: now.Add(-10 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+		{Body: "old note 1", CreatedAt: now.Add(-3 * time.Hour), Author: glNoteAuthor{Username: "other"}},
+		{Body: "old note 2", CreatedAt: now.Add(-2 * time.Hour), Author: glNoteAuthor{Username: "other"}},
+		{Body: "old note 3", CreatedAt: now.Add(-1 * time.Hour), Author: glNoteAuthor{Username: "other"}},
+		{Body: "recent note 1", CreatedAt: now.Add(-30 * time.Minute), Author: glNoteAuthor{Username: "other"}},
+		{Body: "recent note 2", CreatedAt: now.Add(-5 * time.Minute), Author: glNoteAuthor{Username: "other"}},
 	}
 
-	var perItemPaginate atomic.Bool
 	runner := func(name string, args ...string) ([]byte, error) {
-		isPerItem := false
-		for _, a := range args {
-			if strings.Contains(a, "/notes") {
-				isPerItem = true
-			}
-		}
-		if isPerItem {
-			for _, a := range args {
-				if a == "--paginate" {
-					perItemPaginate.Store(true)
-				}
-			}
-		}
 		for _, a := range args {
 			if strings.HasPrefix(a, "projects/o%2Fr/issues?") {
 				return json.Marshal(issues)
@@ -679,12 +669,24 @@ func TestGitLabMaxEventsLimitsPagination(t *testing.T) {
 	}
 
 	gl := NewGitLab(runner, "")
-	err := gl.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 5, 50, ScopeRepo, func(item format.Item) {})
+	var items []format.Item
+	err := gl.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 5, 2, ScopeRepo, func(item format.Item) {
+		items = append(items, item)
+	})
 	if err != nil {
 		t.Fatalf("NextItems() error: %v", err)
 	}
-	if perItemPaginate.Load() {
-		t.Error("getNotes should not use --paginate when maxEvents > 0")
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if len(items[0].Events) != 2 {
+		t.Fatalf("expected 2 events (most recent), got %d", len(items[0].Events))
+	}
+	if !strings.Contains(items[0].Events[0].Summary, "recent note 1") {
+		t.Errorf("first event should be 'recent note 1', got %q", items[0].Events[0].Summary)
+	}
+	if !strings.Contains(items[0].Events[1].Summary, "recent note 2") {
+		t.Errorf("second event should be 'recent note 2', got %q", items[0].Events[1].Summary)
 	}
 }
 

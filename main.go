@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ralphbean/next/backend"
@@ -76,6 +77,7 @@ func run() error {
 	maxEvents := flag.Int("max-events", 100, "maximum events/comments/reactions to fetch per item (0 = no limit)")
 	scopeStr := flag.String("scope", "repo", "scope to search: repo (current repo) or org (all repos in the org)")
 	autoOpen := flag.Bool("auto-open", false, "automatically open each result in the browser")
+	verbose := flag.Bool("verbose", false, "show API call count and elapsed time on stderr")
 	showConfig := flag.Bool("show-config", false, "show configured remotes for all repos")
 	configFlag := flag.Bool("config", false, "show config and available remotes, then choose which remote to track")
 	flag.Parse()
@@ -136,14 +138,24 @@ func run() error {
 		return fmt.Errorf("error: %w\nAre you in a git repository with a remote %q?", err, remoteName)
 	}
 
+	var apiCalls atomic.Int32
+	runner := backend.CmdRunner(defaultRunner)
+	if *verbose {
+		runner = func(name string, args ...string) ([]byte, error) {
+			apiCalls.Add(1)
+			return defaultRunner(name, args...)
+		}
+	}
+
 	var b backend.Backend
 	switch info.Platform {
 	case repo.GitHub:
-		b = backend.NewGitHub(defaultRunner)
+		b = backend.NewGitHub(runner)
 	case repo.GitLab:
-		b = backend.NewGitLab(defaultRunner, gitlabHost)
+		b = backend.NewGitLab(runner, gitlabHost)
 	}
 
+	start := time.Now()
 	user, err := b.CurrentUser()
 	if err != nil {
 		return fmt.Errorf("failed to determine current user: %w", err)
@@ -188,6 +200,10 @@ func run() error {
 	err = b.NextItems(info.Owner, info.Name, user, cooldown, sinceTime, ignore, ignoreUsers, *limit, *maxEvents, scope, emit)
 	if err != nil {
 		return err
+	}
+
+	if *verbose {
+		fmt.Fprintf(os.Stderr, "\033[2m%d API calls in %s\033[0m\n", apiCalls.Load(), time.Since(start).Truncate(time.Millisecond))
 	}
 
 	if emitted == 0 {

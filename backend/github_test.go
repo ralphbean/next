@@ -11,6 +11,29 @@ import (
 	"github.com/ralphbean/next/format"
 )
 
+var emptyReactionsGraphQL, _ = json.Marshal(map[string]interface{}{
+	"data": map[string]interface{}{
+		"repository": map[string]interface{}{
+			"issue": map[string]interface{}{
+				"reactions": map[string]interface{}{"nodes": []interface{}{}},
+				"comments":  map[string]interface{}{"nodes": []interface{}{}},
+			},
+			"pullRequest": map[string]interface{}{
+				"reactions": map[string]interface{}{"nodes": []interface{}{}},
+				"comments":  map[string]interface{}{"nodes": []interface{}{}},
+				"reviews":   map[string]interface{}{"nodes": []interface{}{}},
+			},
+		},
+	},
+})
+
+func emptyReactionResponse(a string) ([]byte, bool) {
+	if a == "graphql" {
+		return emptyReactionsGraphQL, true
+	}
+	return nil, false
+}
+
 func ghCollect(t *testing.T, gh Backend, owner, repo, user string, cooldown time.Duration, ignoreEvents, ignoreUsers MatchSet, limit int) []format.Item {
 	t.Helper()
 	var items []format.Item
@@ -82,17 +105,14 @@ func TestGitHubNextItems(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/10/timeline" {
 				return json.Marshal(events10)
 			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/20/timeline" {
 				return json.Marshal(events20)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -158,17 +178,14 @@ func TestGitHubNextItemsIgnoreEvents(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/1/timeline" {
 				return json.Marshal(events1)
 			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/2/timeline" {
 				return json.Marshal(events2)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -240,25 +257,6 @@ func TestGitHubNextItemsReviewCountsAsTouch(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
-			if a == "graphql" {
-				return json.Marshal(map[string]interface{}{
-					"data": map[string]interface{}{
-						"repository": map[string]interface{}{
-							"pullRequest": map[string]interface{}{
-								"reviews": map[string]interface{}{
-									"nodes": []interface{}{},
-								},
-							},
-						},
-					},
-				})
-			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/5/timeline" {
 				return json.Marshal(events5)
 			}
@@ -267,6 +265,9 @@ func TestGitHubNextItemsReviewCountsAsTouch(t *testing.T) {
 			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/6/timeline" {
 				return json.Marshal(events6)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -359,14 +360,11 @@ func TestGitHubNextItemsIgnoreUsers(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/36/timeline" {
 				return json.Marshal(events36)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -432,12 +430,6 @@ func TestGitHubNextItemsLimit(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/1/timeline" {
 				return json.Marshal(events1)
 			}
@@ -446,6 +438,9 @@ func TestGitHubNextItemsLimit(t *testing.T) {
 			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/3/timeline" {
 				return json.Marshal(events3)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -502,6 +497,9 @@ func TestGitHubNextItemsUntouchedByAnyone(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
+			}
 		}
 		return json.Marshal(emptyEvents)
 	}
@@ -550,36 +548,19 @@ func TestGitHubNextItemsApprovalSummary(t *testing.T) {
 		},
 	}
 
-	emptyGraphQL := map[string]interface{}{
-		"data": map[string]interface{}{
-			"repository": map[string]interface{}{
-				"pullRequest": map[string]interface{}{
-					"reviews": map[string]interface{}{
-						"nodes": []interface{}{},
-					},
-				},
-			},
-		},
-	}
 	runner := func(name string, args ...string) ([]byte, error) {
 		for i, a := range args {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
-			}
-			if a == "graphql" {
-				return json.Marshal(emptyGraphQL)
-			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
 			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/7/timeline" {
 				return json.Marshal(events7)
 			}
 			if i > 0 && args[i-1] == "repos/o/r/pulls/7/reviews" {
 				return json.Marshal(reviews7)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -617,31 +598,36 @@ func TestGitHubNextItemsReactionCountsAsTouch(t *testing.T) {
 	}
 
 	events50 := []ghTimelineEvent{
-		{
-			Event:     "commented",
-			CreatedAt: now.Add(-1 * time.Hour),
-			Actor:     ghActor{Login: "other"},
-			Body:      "needs attention",
-		},
+		{Event: "commented", CreatedAt: now.Add(-1 * time.Hour), Actor: ghActor{Login: "other"}, Body: "needs attention"},
 	}
-	reactions50 := []ghReaction{
-		{
-			User:      ghActor{Login: "me"},
-			Content:   "+1",
-			CreatedAt: now.Add(-10 * time.Minute),
-		},
+	events51 := []ghTimelineEvent{
+		{Event: "commented", CreatedAt: now.Add(-20 * time.Minute), Actor: ghActor{Login: "other"}, Body: "also needs attention"},
 	}
 
-	events51 := []ghTimelineEvent{
-		{
-			Event:     "commented",
-			CreatedAt: now.Add(-20 * time.Minute),
-			Actor:     ghActor{Login: "other"},
-			Body:      "also needs attention",
+	graphQLResp50, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"issue": map[string]interface{}{
+					"reactions": map[string]interface{}{
+						"nodes": []interface{}{
+							map[string]interface{}{
+								"user":      map[string]interface{}{"login": "me"},
+								"createdAt": now.Add(-10 * time.Minute).Format(time.RFC3339),
+							},
+						},
+					},
+					"comments": map[string]interface{}{"nodes": []interface{}{}},
+				},
+			},
 		},
-	}
+	})
 
 	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.Contains(a, "issue(number: 50)") {
+				return graphQLResp50, nil
+			}
+		}
 		for i, a := range args {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
@@ -649,17 +635,11 @@ func TestGitHubNextItemsReactionCountsAsTouch(t *testing.T) {
 			if i > 0 && args[i-1] == "repos/o/r/issues/50/timeline" {
 				return json.Marshal(events50)
 			}
-			if i > 0 && args[i-1] == "repos/o/r/issues/50/reactions" {
-				return json.Marshal(reactions50)
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/51/timeline" {
 				return json.Marshal(events51)
 			}
-			if i > 0 && args[i-1] == "repos/o/r/issues/51/reactions" {
-				return json.Marshal([]ghReaction{})
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -667,7 +647,6 @@ func TestGitHubNextItemsReactionCountsAsTouch(t *testing.T) {
 
 	gh := NewGitHub(runner)
 	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
-	// Issue 50 should be skipped (I reacted within 30m), should get issue 51
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
@@ -695,43 +674,42 @@ func TestGitHubNextItemsCommentReactionCountsAsTouch(t *testing.T) {
 	}
 
 	events60 := []ghTimelineEvent{
-		{
-			Event:     "commented",
-			CreatedAt: now.Add(-1 * time.Hour),
-			Actor:     ghActor{Login: "other"},
-			Body:      "some comment",
-		},
+		{Event: "commented", CreatedAt: now.Add(-1 * time.Hour), Actor: ghActor{Login: "other"}, Body: "some comment"},
 	}
 	events61 := []ghTimelineEvent{
-		{
-			Event:     "commented",
-			CreatedAt: now.Add(-20 * time.Minute),
-			Actor:     ghActor{Login: "other"},
-			Body:      "needs attention",
-		},
+		{Event: "commented", CreatedAt: now.Add(-20 * time.Minute), Actor: ghActor{Login: "other"}, Body: "needs attention"},
 	}
 
-	// Issue 60 has a comment with a reaction from "me"
-	comments60 := []ghComment{
-		{
-			ID:        100,
-			User:      ghActor{Login: "other"},
-			Body:      "some comment",
-			CreatedAt: now.Add(-1 * time.Hour),
-			Reactions: struct {
-				TotalCount int `json:"total_count"`
-			}{TotalCount: 1},
+	graphQLResp60, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"issue": map[string]interface{}{
+					"reactions": map[string]interface{}{"nodes": []interface{}{}},
+					"comments": map[string]interface{}{
+						"nodes": []interface{}{
+							map[string]interface{}{
+								"reactions": map[string]interface{}{
+									"nodes": []interface{}{
+										map[string]interface{}{
+											"user":      map[string]interface{}{"login": "me"},
+											"createdAt": now.Add(-10 * time.Minute).Format(time.RFC3339),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 		},
-	}
-	commentReactions100 := []ghReaction{
-		{
-			User:      ghActor{Login: "me"},
-			Content:   "+1",
-			CreatedAt: now.Add(-10 * time.Minute),
-		},
-	}
+	})
 
 	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.Contains(a, "issue(number: 60)") {
+				return graphQLResp60, nil
+			}
+		}
 		for i, a := range args {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
@@ -742,20 +720,8 @@ func TestGitHubNextItemsCommentReactionCountsAsTouch(t *testing.T) {
 			if i > 0 && args[i-1] == "repos/o/r/issues/61/timeline" {
 				return json.Marshal(events61)
 			}
-			if strings.HasSuffix(a, "/issues/60/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/issues/61/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if i > 0 && args[i-1] == "repos/o/r/issues/60/comments" {
-				return json.Marshal(comments60)
-			}
-			if i > 0 && args[i-1] == "repos/o/r/issues/61/comments" {
-				return json.Marshal([]ghComment{})
-			}
-			if i > 0 && args[i-1] == "repos/o/r/issues/comments/100/reactions" {
-				return json.Marshal(commentReactions100)
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -763,7 +729,6 @@ func TestGitHubNextItemsCommentReactionCountsAsTouch(t *testing.T) {
 
 	gh := NewGitHub(runner)
 	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
-	// Issue 60 should be skipped (I reacted to a comment within 30m), should get issue 61
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
@@ -778,105 +743,74 @@ func TestGitHubReviewCommentReactionMarksTouched(t *testing.T) {
 
 	issues := []ghIssue{
 		{
-			Number:      70,
-			Title:       "PR with review comment reaction",
-			HTMLURL:     "https://github.com/o/r/pull/70",
-			CreatedAt:   now.Add(-2 * time.Hour),
-			UpdatedAt:   now.Add(-5 * time.Minute),
-			User:        ghActor{Login: "other"},
-			PullRequest: &pr,
+			Number: 70, Title: "PR with review comment reaction",
+			HTMLURL: "https://github.com/o/r/pull/70", CreatedAt: now.Add(-2 * time.Hour),
+			UpdatedAt: now.Add(-5 * time.Minute), User: ghActor{Login: "other"}, PullRequest: &pr,
 		},
 		{
-			Number:    71,
-			Title:     "Issue I have not touched",
-			HTMLURL:   "https://github.com/o/r/issues/71",
-			CreatedAt: now.Add(-3 * time.Hour),
-			UpdatedAt: now.Add(-10 * time.Minute),
-			User:      ghActor{Login: "other"},
+			Number: 71, Title: "Issue I have not touched",
+			HTMLURL: "https://github.com/o/r/issues/71", CreatedAt: now.Add(-3 * time.Hour),
+			UpdatedAt: now.Add(-10 * time.Minute), User: ghActor{Login: "other"},
 		},
 	}
 
-	events70 := []ghTimelineEvent{
-		{
-			Event:     "commented",
-			CreatedAt: now.Add(-1 * time.Hour),
-			Actor:     ghActor{Login: "other"},
-			Body:      "review comment",
-		},
-	}
-	events71 := []ghTimelineEvent{
-		{
-			Event:     "commented",
-			CreatedAt: now.Add(-20 * time.Minute),
-			Actor:     ghActor{Login: "other"},
-			Body:      "needs attention",
-		},
-	}
-
-	// PR 70 has a review comment with a reaction from "me"
-	reviewComments70 := []ghComment{
-		{
-			ID:        200,
-			User:      ghActor{Login: "other"},
-			Body:      "inline code comment",
-			CreatedAt: now.Add(-1 * time.Hour),
-			Reactions: struct {
-				TotalCount int `json:"total_count"`
-			}{TotalCount: 1},
-		},
-	}
-	reviewCommentReactions200 := []ghReaction{
-		{
-			User:      ghActor{Login: "me"},
-			Content:   "+1",
-			CreatedAt: now.Add(-10 * time.Minute),
-		},
-	}
-
-	runner := func(name string, args ...string) ([]byte, error) {
-		for i, a := range args {
-			if a == "repos/o/r/issues" {
-				return json.Marshal(issues)
-			}
-			if a == "graphql" {
-				return json.Marshal(map[string]interface{}{
-					"data": map[string]interface{}{
-						"repository": map[string]interface{}{
-							"pullRequest": map[string]interface{}{
-								"reviews": map[string]interface{}{
-									"nodes": []interface{}{},
+	graphQLResp70, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"pullRequest": map[string]interface{}{
+					"reactions": map[string]interface{}{"nodes": []interface{}{}},
+					"comments":  map[string]interface{}{"nodes": []interface{}{}},
+					"reviews": map[string]interface{}{
+						"nodes": []interface{}{
+							map[string]interface{}{
+								"reactions": map[string]interface{}{"nodes": []interface{}{}},
+								"comments": map[string]interface{}{
+									"nodes": []interface{}{
+										map[string]interface{}{
+											"reactions": map[string]interface{}{
+												"nodes": []interface{}{
+													map[string]interface{}{
+														"user":      map[string]interface{}{"login": "me"},
+														"createdAt": now.Add(-10 * time.Minute).Format(time.RFC3339),
+													},
+												},
+											},
+										},
+									},
 								},
 							},
 						},
 					},
-				})
+				},
+			},
+		},
+	})
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.Contains(a, "pullRequest(number: 70)") {
+				return graphQLResp70, nil
+			}
+		}
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
 			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/70/timeline" {
-				return json.Marshal(events70)
+				return json.Marshal([]ghTimelineEvent{
+					{Event: "commented", CreatedAt: now.Add(-1 * time.Hour), Actor: ghActor{Login: "other"}, Body: "review comment"},
+				})
 			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/71/timeline" {
-				return json.Marshal(events71)
-			}
-			if strings.HasSuffix(a, "/issues/70/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/issues/71/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if i > 0 && args[i-1] == "repos/o/r/issues/70/comments" {
-				return json.Marshal([]ghComment{})
-			}
-			if i > 0 && args[i-1] == "repos/o/r/issues/71/comments" {
-				return json.Marshal([]ghComment{})
-			}
-			if i > 0 && args[i-1] == "repos/o/r/pulls/70/comments" {
-				return json.Marshal(reviewComments70)
-			}
-			if i > 0 && args[i-1] == "repos/o/r/pulls/comments/200/reactions" {
-				return json.Marshal(reviewCommentReactions200)
+				return json.Marshal([]ghTimelineEvent{
+					{Event: "commented", CreatedAt: now.Add(-20 * time.Minute), Actor: ghActor{Login: "other"}, Body: "needs attention"},
+				})
 			}
 			if i > 0 && args[i-1] == "repos/o/r/pulls/70/reviews" {
 				return json.Marshal([]ghReview{})
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -884,12 +818,96 @@ func TestGitHubReviewCommentReactionMarksTouched(t *testing.T) {
 
 	gh := NewGitHub(runner)
 	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
-	// PR 70 should be skipped (I reacted to a review comment within 30m), should get issue 71
 	if len(items) != 1 {
 		t.Fatalf("NextItems() returned %d items, want 1", len(items))
 	}
 	if items[0].Title != "Issue I have not touched" {
 		t.Errorf("expected issue 71, got %q", items[0].Title)
+	}
+}
+
+func TestGitHubReviewReactionCountsAsTouch(t *testing.T) {
+	now := time.Now()
+	pr := json.RawMessage(`{}`)
+
+	issues := []ghIssue{
+		{
+			Number: 90, Title: "PR where I reacted to a review",
+			HTMLURL: "https://github.com/o/r/pull/90", CreatedAt: now.Add(-2 * time.Hour),
+			UpdatedAt: now.Add(-5 * time.Minute), User: ghActor{Login: "other"}, PullRequest: &pr,
+		},
+		{
+			Number: 91, Title: "Issue I have not touched",
+			HTMLURL: "https://github.com/o/r/issues/91", CreatedAt: now.Add(-3 * time.Hour),
+			UpdatedAt: now.Add(-10 * time.Minute), User: ghActor{Login: "other"},
+		},
+	}
+
+	graphQLResp90, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"pullRequest": map[string]interface{}{
+					"reactions": map[string]interface{}{"nodes": []interface{}{}},
+					"comments":  map[string]interface{}{"nodes": []interface{}{}},
+					"reviews": map[string]interface{}{
+						"nodes": []interface{}{
+							map[string]interface{}{
+								"reactions": map[string]interface{}{
+									"nodes": []interface{}{
+										map[string]interface{}{
+											"user":      map[string]interface{}{"login": "me"},
+											"createdAt": now.Add(-10 * time.Minute).Format(time.RFC3339),
+										},
+									},
+								},
+								"comments": map[string]interface{}{"nodes": []interface{}{}},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	runner := func(name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.Contains(a, "pullRequest(number: 90)") {
+				return graphQLResp90, nil
+			}
+		}
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/90/timeline" {
+				return json.Marshal([]ghTimelineEvent{
+					{Event: "review_requested", CreatedAt: now.Add(-1 * time.Hour), Actor: ghActor{Login: "other"}},
+				})
+			}
+			if i > 0 && args[i-1] == "repos/o/r/pulls/90/reviews" {
+				return json.Marshal([]ghReview{
+					{User: ghActor{Login: "reviewer"}, State: "COMMENTED", SubmittedAt: now.Add(-30 * time.Minute), Body: "looks good"},
+				})
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/91/timeline" {
+				return json.Marshal([]ghTimelineEvent{
+					{Event: "commented", CreatedAt: now.Add(-20 * time.Minute), Actor: ghActor{Login: "other"}, Body: "needs attention"},
+				})
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
+	if len(items) != 1 {
+		t.Fatalf("NextItems() returned %d items, want 1", len(items))
+	}
+	if items[0].Title != "Issue I have not touched" {
+		t.Errorf("expected issue 91, got %q", items[0].Title)
 	}
 }
 
@@ -940,11 +958,8 @@ func TestGitHubRetryOnRateLimit(t *testing.T) {
 				}
 				return json.Marshal(events80)
 			}
-			if strings.HasSuffix(a, "/issues/80/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if i > 0 && args[i-1] == "repos/o/r/issues/80/comments" {
-				return json.Marshal([]ghComment{})
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -960,117 +975,6 @@ func TestGitHubRetryOnRateLimit(t *testing.T) {
 	}
 	if got := timelineCalls.Load(); got != 2 {
 		t.Errorf("expected 2 timeline calls (1 failed + 1 retry), got %d", got)
-	}
-}
-
-func TestGitHubReviewReactionCountsAsTouch(t *testing.T) {
-	now := time.Now()
-	pr := json.RawMessage(`{}`)
-
-	issues := []ghIssue{
-		{
-			Number:      90,
-			Title:       "PR where I reacted to a review",
-			HTMLURL:     "https://github.com/o/r/pull/90",
-			CreatedAt:   now.Add(-2 * time.Hour),
-			UpdatedAt:   now.Add(-5 * time.Minute),
-			User:        ghActor{Login: "other"},
-			PullRequest: &pr,
-		},
-		{
-			Number:    91,
-			Title:     "Issue I have not touched",
-			HTMLURL:   "https://github.com/o/r/issues/91",
-			CreatedAt: now.Add(-3 * time.Hour),
-			UpdatedAt: now.Add(-10 * time.Minute),
-			User:      ghActor{Login: "other"},
-		},
-	}
-
-	events90 := []ghTimelineEvent{
-		{
-			Event:     "review_requested",
-			CreatedAt: now.Add(-1 * time.Hour),
-			Actor:     ghActor{Login: "other"},
-		},
-	}
-	reviews90 := []ghReview{
-		{
-			User:        ghActor{Login: "reviewer"},
-			State:       "COMMENTED",
-			SubmittedAt: now.Add(-30 * time.Minute),
-			Body:        "looks good but needs a tweak",
-		},
-	}
-	events91 := []ghTimelineEvent{
-		{
-			Event:     "commented",
-			CreatedAt: now.Add(-20 * time.Minute),
-			Actor:     ghActor{Login: "other"},
-			Body:      "needs attention",
-		},
-	}
-
-	// GraphQL response: I reacted to the review with thumbs up 10 min ago
-	graphQLResp := map[string]interface{}{
-		"data": map[string]interface{}{
-			"repository": map[string]interface{}{
-				"pullRequest": map[string]interface{}{
-					"reviews": map[string]interface{}{
-						"nodes": []interface{}{
-							map[string]interface{}{
-								"reactions": map[string]interface{}{
-									"nodes": []interface{}{
-										map[string]interface{}{
-											"user":      map[string]interface{}{"login": "me"},
-											"content":   "THUMBS_UP",
-											"createdAt": now.Add(-10 * time.Minute).Format(time.RFC3339),
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	runner := func(name string, args ...string) ([]byte, error) {
-		for i, a := range args {
-			if a == "repos/o/r/issues" {
-				return json.Marshal(issues)
-			}
-			if a == "graphql" {
-				return json.Marshal(graphQLResp)
-			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
-			if i > 0 && args[i-1] == "repos/o/r/issues/90/timeline" {
-				return json.Marshal(events90)
-			}
-			if i > 0 && args[i-1] == "repos/o/r/pulls/90/reviews" {
-				return json.Marshal(reviews90)
-			}
-			if i > 0 && args[i-1] == "repos/o/r/issues/91/timeline" {
-				return json.Marshal(events91)
-			}
-		}
-		return nil, fmt.Errorf("unexpected call: %v", args)
-	}
-
-	gh := NewGitHub(runner)
-	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
-	// PR 90 should be skipped (I reacted to a review within 30m), should get issue 91
-	if len(items) != 1 {
-		t.Fatalf("NextItems() returned %d items, want 1", len(items))
-	}
-	if items[0].Title != "Issue I have not touched" {
-		t.Errorf("expected issue 91, got %q", items[0].Title)
 	}
 }
 
@@ -1110,17 +1014,14 @@ func TestGitHubNextItemsOrgScope(t *testing.T) {
 			if a == "search/issues" {
 				return json.Marshal(searchResult)
 			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if i > 0 && args[i-1] == "repos/myorg/repo-a/issues/10/timeline" {
 				return json.Marshal(events10)
 			}
 			if i > 0 && args[i-1] == "repos/myorg/repo-b/issues/5/timeline" {
 				return json.Marshal(events5)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -1180,8 +1081,8 @@ func TestGitHubCommentUserField(t *testing.T) {
 			if a == "repos/o/r/issues/324/timeline" {
 				return json.Marshal(events324)
 			}
-			if strings.HasSuffix(a, "/reactions") || strings.HasSuffix(a, "/comments") {
-				return []byte("[]"), nil
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -1226,17 +1127,14 @@ func TestGitHubTierAuthoredBeforeGeneral(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/1/timeline" {
 				return json.Marshal(events1)
 			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/2/timeline" {
 				return json.Marshal(events2)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -1288,17 +1186,14 @@ func TestGitHubTierRecencyWithinOthers(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/1/timeline" {
 				return json.Marshal(events1)
 			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/2/timeline" {
 				return json.Marshal(events2)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -1363,12 +1258,6 @@ func TestGitHubTierOrdering(t *testing.T) {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
 			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/1/timeline" {
 				return json.Marshal(events1)
 			}
@@ -1377,6 +1266,9 @@ func TestGitHubTierOrdering(t *testing.T) {
 			}
 			if i > 0 && args[i-1] == "repos/o/r/issues/3/timeline" {
 				return json.Marshal(events3)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -1434,14 +1326,11 @@ func TestGitHubSincePassedToAPI(t *testing.T) {
 				capturedArgs = append([]string{name}, args...)
 				return json.Marshal(issues)
 			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if strings.HasSuffix(a, "/timeline") {
 				return json.Marshal(events1)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -1504,14 +1393,11 @@ func TestGitHubSincePassedToOrgSearch(t *testing.T) {
 				_ = i
 				return json.Marshal(searchResult)
 			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
-			}
 			if strings.HasSuffix(a, "/timeline") {
 				return json.Marshal(events10)
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -1579,11 +1465,8 @@ func TestGitHubParallelFetching(t *testing.T) {
 					{Event: "commented", CreatedAt: now.Add(-time.Duration(issueNum) * time.Minute), Actor: ghActor{Login: "other"}, Body: "comment"},
 				})
 			}
-			if strings.HasSuffix(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.HasSuffix(a, "/comments") {
-				return json.Marshal([]ghComment{})
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -1636,11 +1519,8 @@ func TestGitHubDefaultMaxEvents(t *testing.T) {
 			if strings.Contains(a, "/timeline") {
 				return json.Marshal(events)
 			}
-			if strings.Contains(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.Contains(a, "/comments") {
-				return json.Marshal([]ghComment{})
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
@@ -1662,39 +1542,28 @@ func TestGitHubDefaultMaxEvents(t *testing.T) {
 	}
 }
 
-func TestGitHubMaxEventsLimitsPagination(t *testing.T) {
+func TestGitHubMaxEventsKeepsMostRecent(t *testing.T) {
 	now := time.Now()
 
 	issues := []ghIssue{
 		{
 			Number:    1,
-			Title:     "Issue with events",
+			Title:     "Issue with many events",
 			HTMLURL:   "https://github.com/o/r/issues/1",
-			UpdatedAt: now.Add(-10 * time.Minute),
+			UpdatedAt: now.Add(-5 * time.Minute),
 			User:      ghActor{Login: "other"},
 		},
 	}
 
 	events := []ghTimelineEvent{
-		{Event: "commented", CreatedAt: now.Add(-10 * time.Minute), Actor: ghActor{Login: "other"}, Body: "hello"},
+		{Event: "commented", CreatedAt: now.Add(-3 * time.Hour), Actor: ghActor{Login: "other"}, Body: "old comment 1"},
+		{Event: "commented", CreatedAt: now.Add(-2 * time.Hour), Actor: ghActor{Login: "other"}, Body: "old comment 2"},
+		{Event: "commented", CreatedAt: now.Add(-1 * time.Hour), Actor: ghActor{Login: "other"}, Body: "old comment 3"},
+		{Event: "commented", CreatedAt: now.Add(-30 * time.Minute), Actor: ghActor{Login: "other"}, Body: "recent comment 1"},
+		{Event: "commented", CreatedAt: now.Add(-5 * time.Minute), Actor: ghActor{Login: "other"}, Body: "recent comment 2"},
 	}
 
-	var perItemPaginate atomic.Bool
 	runner := func(name string, args ...string) ([]byte, error) {
-		isPerItem := false
-		for _, a := range args {
-			if strings.Contains(a, "/timeline") || strings.Contains(a, "/reactions") ||
-				strings.Contains(a, "/comments") || strings.Contains(a, "/reviews") {
-				isPerItem = true
-			}
-		}
-		if isPerItem {
-			for _, a := range args {
-				if a == "--paginate" {
-					perItemPaginate.Store(true)
-				}
-			}
-		}
 		for _, a := range args {
 			if a == "repos/o/r/issues" {
 				return json.Marshal(issues)
@@ -1702,22 +1571,85 @@ func TestGitHubMaxEventsLimitsPagination(t *testing.T) {
 			if strings.Contains(a, "/timeline") {
 				return json.Marshal(events)
 			}
-			if strings.Contains(a, "/reactions") {
-				return json.Marshal([]ghReaction{})
-			}
-			if strings.Contains(a, "/comments") {
-				return json.Marshal([]ghComment{})
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
 			}
 		}
 		return nil, fmt.Errorf("unexpected call: %v", args)
 	}
 
 	gh := NewGitHub(runner)
-	err := gh.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 5, 50, ScopeRepo, func(item format.Item) {})
+	var items []format.Item
+	err := gh.NextItems("o", "r", "me", 30*time.Minute, time.Time{}, nil, nil, 5, 2, ScopeRepo, func(item format.Item) {
+		items = append(items, item)
+	})
 	if err != nil {
 		t.Fatalf("NextItems() error: %v", err)
 	}
-	if perItemPaginate.Load() {
-		t.Error("per-item API calls should not use --paginate when maxEvents > 0")
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if len(items[0].Events) != 2 {
+		t.Fatalf("expected 2 events (most recent), got %d", len(items[0].Events))
+	}
+	if !strings.Contains(items[0].Events[0].Summary, "recent comment 1") {
+		t.Errorf("first event should be 'recent comment 1', got %q", items[0].Events[0].Summary)
+	}
+	if !strings.Contains(items[0].Events[1].Summary, "recent comment 2") {
+		t.Errorf("second event should be 'recent comment 2', got %q", items[0].Events[1].Summary)
+	}
+}
+
+func TestGitHubLazyFetchSkipsReviewsOnCooldown(t *testing.T) {
+	now := time.Now()
+	prMarker := json.RawMessage(`{}`)
+
+	issues := []ghIssue{
+		{
+			Number:      100,
+			Title:       "PR I touched recently via timeline",
+			HTMLURL:     "https://github.com/o/r/pull/100",
+			UpdatedAt:   now.Add(-5 * time.Minute),
+			User:        ghActor{Login: "other"},
+			PullRequest: &prMarker,
+		},
+	}
+
+	events100 := []ghTimelineEvent{
+		{
+			Event:     "commented",
+			CreatedAt: now.Add(-5 * time.Minute),
+			Actor:     ghActor{Login: "me"},
+			Body:      "I just commented",
+		},
+	}
+
+	var reviewsCalled atomic.Bool
+	runner := func(name string, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "repos/o/r/issues" {
+				return json.Marshal(issues)
+			}
+			if i > 0 && args[i-1] == "repos/o/r/issues/100/timeline" {
+				return json.Marshal(events100)
+			}
+			if strings.Contains(a, "/reviews") {
+				reviewsCalled.Store(true)
+				return json.Marshal([]ghReview{})
+			}
+			if out, ok := emptyReactionResponse(a); ok {
+				return out, nil
+			}
+		}
+		return nil, fmt.Errorf("unexpected call: %v", args)
+	}
+
+	gh := NewGitHub(runner)
+	items := ghCollect(t, gh, "o", "r", "me", 30*time.Minute, nil, nil, 5)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items (PR should be skipped via cooldown), got %d", len(items))
+	}
+	if reviewsCalled.Load() {
+		t.Error("reviews API should not be called when timeline already triggers cooldown skip")
 	}
 }

@@ -52,18 +52,7 @@ type ghReview struct {
 
 type ghReaction struct {
 	User      ghActor   `json:"user"`
-	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"created_at"`
-}
-
-type ghComment struct {
-	ID        int       `json:"id"`
-	User      ghActor   `json:"user"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"created_at"`
-	Reactions struct {
-		TotalCount int `json:"total_count"`
-	} `json:"reactions"`
 }
 
 type ghUser struct {
@@ -79,13 +68,6 @@ func NewGitHub(run CmdRunner) Backend {
 }
 
 const maxRetries = 3
-
-func perItemArgs(endpoint string, maxEvents int) []string {
-	if maxEvents > 0 {
-		return []string{"api", fmt.Sprintf("%s?per_page=%d", endpoint, maxEvents)}
-	}
-	return []string{"api", endpoint, "--paginate"}
-}
 
 type ghItemResult struct {
 	item *format.Item
@@ -254,82 +236,54 @@ func (g *gitHub) processIssue(issue ghIssue, owner, repo, user string, cutoff ti
 		title = string(r[:50]) + "..."
 	}
 
+	// Phase A: fetch timeline and check cooldown early
 	events, err := g.getTimeline(owner, repo, issue.Number, maxEvents)
 	if err != nil {
 		return ghItemResult{err: err}
 	}
-	issueReactions, err := g.getReactions(owner, repo, issue.Number, maxEvents)
-	if err != nil {
-		return ghItemResult{err: err}
+	for _, ev := range events {
+		if ignoreUsers.Match(ev.login()) || ignoreEvents.Match(ev.Event) {
+			continue
+		}
+		if ev.login() != "" && ev.login() == user && ev.CreatedAt.After(cutoff) {
+			fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (cooldown)\033[0m\n", kind, label, title)
+			return ghItemResult{}
+		}
 	}
-	commentReactions, err := g.getCommentReactions(owner, repo, issue.Number, maxEvents)
-	if err != nil {
-		return ghItemResult{err: err}
-	}
+
+	// Phase B: fetch reviews for PRs and check cooldown
 	var reviews []ghReview
-	var reviewCommentReactions []ghReaction
 	if issue.PullRequest != nil {
 		reviews, err = g.getReviews(owner, repo, issue.Number, maxEvents)
 		if err != nil {
 			return ghItemResult{err: err}
 		}
-		reviewCommentReactions, err = g.getReviewCommentReactions(owner, repo, issue.Number, maxEvents)
-		if err != nil {
-			return ghItemResult{err: err}
-		}
-		var reviewReactions []ghReaction
-		reviewReactions, err = g.getReviewReactions(owner, repo, issue.Number, maxEvents)
-		if err != nil {
-			return ghItemResult{err: err}
-		}
-		reviewCommentReactions = append(reviewCommentReactions, reviewReactions...)
-	}
-	reactions := append(issueReactions, commentReactions...)
-	reactions = append(reactions, reviewCommentReactions...)
-
-	userTouched := false
-	for _, ev := range events {
-		if ignoreUsers.Match(ev.login()) {
-			continue
-		}
-		if ignoreEvents.Match(ev.Event) {
-			continue
-		}
-		if ev.login() != "" && ev.login() == user && ev.CreatedAt.After(cutoff) {
-			userTouched = true
-			break
-		}
-	}
-	if !userTouched {
 		for _, r := range reviews {
 			if ignoreUsers.Match(r.User.Login) {
 				continue
 			}
 			if r.User.Login == user && r.SubmittedAt.After(cutoff) {
-				userTouched = true
-				break
+				fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (cooldown)\033[0m\n", kind, label, title)
+				return ghItemResult{}
 			}
 		}
 	}
-	if !userTouched {
-		for _, r := range reactions {
-			if r.User.Login == user && r.CreatedAt.After(cutoff) {
-				userTouched = true
-				break
-			}
-		}
+
+	// Phase C: fetch all reactions via single GraphQL query and check cooldown
+	reactions, err := g.getAllReactions(owner, repo, issue.Number, issue.PullRequest != nil, maxEvents)
+	if err != nil {
+		return ghItemResult{err: err}
 	}
-	if userTouched {
-		fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (cooldown)\033[0m\n", kind, label, title)
-		return ghItemResult{}
+	for _, r := range reactions {
+		if r.User.Login == user && r.CreatedAt.After(cutoff) {
+			fmt.Fprintf(os.Stderr, "\033[2m  %s %s %s — skipped (cooldown)\033[0m\n", kind, label, title)
+			return ghItemResult{}
+		}
 	}
 
 	var lastUserTime time.Time
 	for _, ev := range events {
-		if ignoreUsers.Match(ev.login()) {
-			continue
-		}
-		if ignoreEvents.Match(ev.Event) {
+		if ignoreUsers.Match(ev.login()) || ignoreEvents.Match(ev.Event) {
 			continue
 		}
 		if ev.login() == user && ev.CreatedAt.After(lastUserTime) {
@@ -494,7 +448,7 @@ func parseRepoFromURL(htmlURL string) (string, string) {
 
 func (g *gitHub) getTimeline(owner, repo string, number, maxEvents int) ([]ghTimelineEvent, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/timeline", owner, repo, number)
-	out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
+	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get timeline for #%d: %w", number, err)
 	}
@@ -502,154 +456,15 @@ func (g *gitHub) getTimeline(owner, repo string, number, maxEvents int) ([]ghTim
 	if err := json.Unmarshal(out, &events); err != nil {
 		return nil, fmt.Errorf("failed to parse timeline: %w", err)
 	}
+	if maxEvents > 0 && len(events) > maxEvents {
+		events = events[len(events)-maxEvents:]
+	}
 	return events, nil
-}
-
-func (g *gitHub) getReactions(owner, repo string, number, maxEvents int) ([]ghReaction, error) {
-	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/reactions", owner, repo, number)
-	out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get reactions for #%d: %w", number, err)
-	}
-	var reactions []ghReaction
-	if err := json.Unmarshal(out, &reactions); err != nil {
-		return nil, fmt.Errorf("failed to parse reactions: %w", err)
-	}
-	return reactions, nil
-}
-
-func (g *gitHub) getCommentReactions(owner, repo string, number, maxEvents int) ([]ghReaction, error) {
-	comments, err := g.getComments(owner, repo, number, maxEvents)
-	if err != nil {
-		return nil, err
-	}
-	var all []ghReaction
-	for _, c := range comments {
-		if c.Reactions.TotalCount == 0 {
-			continue
-		}
-		endpoint := fmt.Sprintf("repos/%s/%s/issues/comments/%d/reactions", owner, repo, c.ID)
-		out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get reactions for comment %d: %w", c.ID, err)
-		}
-		var reactions []ghReaction
-		if err := json.Unmarshal(out, &reactions); err != nil {
-			return nil, fmt.Errorf("failed to parse comment reactions: %w", err)
-		}
-		all = append(all, reactions...)
-	}
-	return all, nil
-}
-
-func (g *gitHub) getReviewCommentReactions(owner, repo string, number, maxEvents int) ([]ghReaction, error) {
-	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/comments", owner, repo, number)
-	out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get review comments for #%d: %w", number, err)
-	}
-	var comments []ghComment
-	if err := json.Unmarshal(out, &comments); err != nil {
-		return nil, fmt.Errorf("failed to parse review comments: %w", err)
-	}
-	var all []ghReaction
-	for _, c := range comments {
-		if c.Reactions.TotalCount == 0 {
-			continue
-		}
-		ep := fmt.Sprintf("repos/%s/%s/pulls/comments/%d/reactions", owner, repo, c.ID)
-		out, err := g.runAPI("gh", perItemArgs(ep, maxEvents)...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get reactions for review comment %d: %w", c.ID, err)
-		}
-		var reactions []ghReaction
-		if err := json.Unmarshal(out, &reactions); err != nil {
-			return nil, fmt.Errorf("failed to parse review comment reactions: %w", err)
-		}
-		all = append(all, reactions...)
-	}
-	return all, nil
-}
-
-func (g *gitHub) getComments(owner, repo string, number, maxEvents int) ([]ghComment, error) {
-	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number)
-	out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get comments for #%d: %w", number, err)
-	}
-	var comments []ghComment
-	if err := json.Unmarshal(out, &comments); err != nil {
-		return nil, fmt.Errorf("failed to parse comments: %w", err)
-	}
-	return comments, nil
-}
-
-func (g *gitHub) getReviewReactions(owner, repo string, number, maxEvents int) ([]ghReaction, error) {
-	reviewsFirst := 100
-	reactionsFirst := 100
-	if maxEvents > 0 {
-		reviewsFirst = maxEvents
-		reactionsFirst = maxEvents
-	}
-	query := fmt.Sprintf(`{
-		repository(owner: %q, name: %q) {
-			pullRequest(number: %d) {
-				reviews(first: %d) {
-					nodes {
-						reactions(first: %d) {
-							nodes {
-								user { login }
-								content
-								createdAt
-							}
-						}
-					}
-				}
-			}
-		}
-	}`, owner, repo, number, reviewsFirst, reactionsFirst)
-	out, err := g.runAPI("gh", "api", "graphql", "-f", "query="+query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get review reactions for #%d: %w", number, err)
-	}
-	var resp struct {
-		Data struct {
-			Repository struct {
-				PullRequest struct {
-					Reviews struct {
-						Nodes []struct {
-							Reactions struct {
-								Nodes []struct {
-									User      ghActor   `json:"user"`
-									Content   string    `json:"content"`
-									CreatedAt time.Time `json:"createdAt"`
-								} `json:"nodes"`
-							} `json:"reactions"`
-						} `json:"nodes"`
-					} `json:"reviews"`
-				} `json:"pullRequest"`
-			} `json:"repository"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse review reactions: %w", err)
-	}
-	var all []ghReaction
-	for _, review := range resp.Data.Repository.PullRequest.Reviews.Nodes {
-		for _, r := range review.Reactions.Nodes {
-			all = append(all, ghReaction{
-				User:      r.User,
-				Content:   r.Content,
-				CreatedAt: r.CreatedAt,
-			})
-		}
-	}
-	return all, nil
 }
 
 func (g *gitHub) getReviews(owner, repo string, number, maxEvents int) ([]ghReview, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number)
-	out, err := g.runAPI("gh", perItemArgs(endpoint, maxEvents)...)
+	out, err := g.runAPI("gh", "api", endpoint, "--paginate")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get reviews for #%d: %w", number, err)
 	}
@@ -657,7 +472,113 @@ func (g *gitHub) getReviews(owner, repo string, number, maxEvents int) ([]ghRevi
 	if err := json.Unmarshal(out, &reviews); err != nil {
 		return nil, fmt.Errorf("failed to parse reviews: %w", err)
 	}
+	if maxEvents > 0 && len(reviews) > maxEvents {
+		reviews = reviews[len(reviews)-maxEvents:]
+	}
 	return reviews, nil
+}
+
+func (g *gitHub) getAllReactions(owner, repo string, number int, isPR bool, maxEvents int) ([]ghReaction, error) {
+	limit := maxEvents
+	if limit <= 0 {
+		limit = 100
+	}
+	var query string
+	if isPR {
+		query = fmt.Sprintf(`{
+			repository(owner: %q, name: %q) {
+				pullRequest(number: %d) {
+					reactions(last: 20) { nodes { user { login } createdAt } }
+					comments(last: %d) { nodes { reactions(last: 20) { nodes { user { login } createdAt } } } }
+					reviews(last: %d) { nodes {
+						reactions(last: 20) { nodes { user { login } createdAt } }
+						comments(last: 20) { nodes { reactions(last: 20) { nodes { user { login } createdAt } } } }
+					} }
+				}
+			}
+		}`, owner, repo, number, limit, limit)
+	} else {
+		query = fmt.Sprintf(`{
+			repository(owner: %q, name: %q) {
+				issue(number: %d) {
+					reactions(last: 20) { nodes { user { login } createdAt } }
+					comments(last: %d) { nodes { reactions(last: 20) { nodes { user { login } createdAt } } } }
+				}
+			}
+		}`, owner, repo, number, limit)
+	}
+
+	out, err := g.runAPI("gh", "api", "graphql", "-f", "query="+query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reactions for #%d: %w", number, err)
+	}
+
+	type gqlReactionNode struct {
+		User      ghActor   `json:"user"`
+		CreatedAt time.Time `json:"createdAt"`
+	}
+	type gqlReactions struct {
+		Nodes []gqlReactionNode `json:"nodes"`
+	}
+	type gqlComment struct {
+		Reactions gqlReactions `json:"reactions"`
+	}
+	type gqlReview struct {
+		Reactions gqlReactions `json:"reactions"`
+		Comments  struct {
+			Nodes []gqlComment `json:"nodes"`
+		} `json:"comments"`
+	}
+	type gqlItem struct {
+		Reactions gqlReactions `json:"reactions"`
+		Comments  struct {
+			Nodes []gqlComment `json:"nodes"`
+		} `json:"comments"`
+		Reviews struct {
+			Nodes []gqlReview `json:"nodes"`
+		} `json:"reviews"`
+	}
+
+	var resp struct {
+		Data struct {
+			Repository struct {
+				Issue       *gqlItem `json:"issue"`
+				PullRequest *gqlItem `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse reactions: %w", err)
+	}
+
+	item := resp.Data.Repository.Issue
+	if isPR {
+		item = resp.Data.Repository.PullRequest
+	}
+	if item == nil {
+		return nil, nil
+	}
+
+	var all []ghReaction
+	for _, n := range item.Reactions.Nodes {
+		all = append(all, ghReaction{User: n.User, CreatedAt: n.CreatedAt})
+	}
+	for _, c := range item.Comments.Nodes {
+		for _, n := range c.Reactions.Nodes {
+			all = append(all, ghReaction{User: n.User, CreatedAt: n.CreatedAt})
+		}
+	}
+	for _, r := range item.Reviews.Nodes {
+		for _, n := range r.Reactions.Nodes {
+			all = append(all, ghReaction{User: n.User, CreatedAt: n.CreatedAt})
+		}
+		for _, c := range r.Comments.Nodes {
+			for _, n := range c.Reactions.Nodes {
+				all = append(all, ghReaction{User: n.User, CreatedAt: n.CreatedAt})
+			}
+		}
+	}
+	return all, nil
 }
 
 func reviewSummary(state, body string) string {
